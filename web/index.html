@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#164f43"><title>PicoCare · 讓關心，有所依據</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<body>
+  <div id="app"></div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="pair-dialog"><form id="pair-form"><button class="close" type="button" data-close="pair-dialog" aria-label="關閉">×</button><span class="eyebrow">CONNECTED CARE</span><h2>連起一份關心</h2><p>為被照顧者取個熟悉的稱呼，再把配對碼輸入他的 PicoCare 手機。</p><label>被照顧者稱呼<input name="displayName" placeholder="例如：媽媽、林阿姨" maxlength="40" required></label><button class="primary" type="submit">產生手機配對碼</button><div id="pair-result" aria-live="polite"></div></form></dialog>
+  <dialog id="detail-dialog"><button class="close" type="button" data-close="detail-dialog" aria-label="關閉">×</button><div id="person-detail"></div></dialog>
+</body></html>
