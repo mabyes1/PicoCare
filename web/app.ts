@@ -1,10 +1,15 @@
-import type { Workspace, PersonView, PeopleResponse, PersonDetail, CareAlert, CarePlan } from '../shared/protocol.js';
+import type { Workspace, PersonView, PeopleResponse, PersonDetail, CareAlert, CarePlan, MetaIntegration } from '../shared/protocol.js';
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const app = $('app');
 let workspace: Workspace | null = null, people: PersonView[] = [], demoEnabled = false, pending = false;
 let selectedId: string | null = null, filter: 'all' | 'attention' = 'all', search = '';
 let alerts: CareAlert[] = [];
 let serverClock = Date.now(), receivedClock = Date.now();
+let modelStatus: MetaIntegration = { enabled: false, status: 'not_configured', model: null };
+function modelLabel() {
+  const states: Record<string, string> = { not_configured: '尚未設定', disabled: '未啟用', key_missing: '缺少 Key', ready: '已設定，等待判讀', connecting: '判讀中', active: '已連線', fallback: 'API 暫不可用，使用本地規則', daily_limit: '今日次數上限，使用本地規則' };
+  return `Meta ${states[modelStatus.status] || modelStatus.status}${modelStatus.model ? ` · ${modelStatus.model}` : ''}`;
+}
 const currentTime = () => serverClock + Date.now() - receivedClock;
 const careLabels: Record<string, string> = { waiting: '等待寬限時間', observing: '可能看影片，先延後確認', question_pending: '已問一題，等待回覆', deferred: '本人選擇晚點回覆', clarified: '本人已確認', escalated: '待照顧者釐清', resolved: '已有人接手處理', cancelled: '已停止這次確認' };
 function desktopAlerts() {
@@ -24,7 +29,7 @@ function renderAlerts() {
   const header = el('div', undefined, 'toolbar'); header.append(el('h2', `關心提醒匣 · ${alerts.filter(a => !a.resolvedAt).length} 件待處理`), button('開啟桌面通知', async () => {
     if (!('Notification' in window)) { toast('這個瀏覽器不支援桌面通知，提醒仍會保存在這裡'); return; }
     const result = await Notification.requestPermission(); toast(result === 'granted' ? '已開啟；頁面執行時會提示新提醒' : '提醒會保存在提醒匣'); desktopAlerts();
-  }, 'secondary')); target.append(header, el('p', '提醒會保存在這裡。桌面通知需要此頁持續執行；已讀不代表已處理。', 'muted small'));
+  }, 'secondary')); target.append(header, el('p', '提醒會保存在這裡。桌面通知需要此頁持續執行，處理完成後可結束提醒。', 'muted small'));
   for (const a of alerts.slice(0, 12)) {
     const row = el('article', undefined, 'care-alert' + (a.resolvedAt ? ' resolved' : ''));
     row.append(el('strong', `${a.personName} · ${a.kind === 'help' ? '本人求助' : '待釐清'} · ${a.resolvedAt ? '已結束' : a.readAt ? '已讀／待處理' : '未讀'}`), el('p', a.title), el('small', new Date(a.createdAt).toLocaleString('zh-TW')));
@@ -78,7 +83,7 @@ function shell() {
   nav.append(allButton, attentionButton); sidebar.append(nav);
   const note = el('div', undefined, 'sidebar-note'); note.append(el('span', '一份關心，多一點理解。'), el('p', '先看線索，再決定下一步。')); sidebar.append(note, el('div', `${workspace!.caregiverName} · 照顧者`, 'caregiver')); app.append(sidebar);
   const main = el('main', undefined, 'main');
-  const top = el('header', undefined, 'topbar'); top.append(el('span', workspace!.kind === 'institution' ? '機構工作台 / 關懷總覽' : '我的關懷 / 最近狀況'), el('span', '◌  Meta 等待額度 · 本機規則整理', 'model-badge')); main.append(top);
+  const top = el('header', undefined, 'topbar'); top.append(el('span', workspace!.kind === 'institution' ? '機構工作台 / 關懷總覽' : '我的關懷 / 最近狀況'), el('span', modelLabel(), 'model-badge')); main.append(top);
   const hero = el('section', undefined, 'hero'), heroCopy = el('div'); heroCopy.append(el('span', 'A LITTLE CLOSER, EVERY DAY.', 'eyebrow'), el('h1', workspace!.kind === 'institution' ? '今天的關心，從這裡開始。' : '讓牽掛，多一份安心。'), el('p', '看見最近的手機線索，也聽見本人真正的回覆。', 'muted')); hero.append(heroCopy, button('＋ 配對手機', () => { $('pair-result').replaceChildren(); ($('pair-form') as HTMLFormElement).reset(); $<HTMLDialogElement>('pair-dialog').showModal(); }, 'primary')); main.append(hero);
   const stats = el('section', undefined, 'stats'); stats.id = 'stats'; main.append(stats);
   const inbox = el('section', undefined, 'care-inbox'); inbox.id = 'care-inbox'; main.append(inbox);
@@ -113,15 +118,16 @@ function renderCards() {
   }
 }
 async function refresh() {
-  const result = await api<PeopleResponse>('/api/people'); people = result.people; alerts = result.alerts; serverClock = result.serverAt; receivedClock = Date.now();
+  const result = await api<PeopleResponse>('/api/people'); people = result.people; alerts = result.alerts; modelStatus = result.meta; serverClock = result.serverAt; receivedClock = Date.now();
   if (workspace?.workspaceId !== result.workspace.workspaceId) { workspace = result.workspace; shell(); } else render();
+  const badge = document.querySelector('.model-badge'); if (badge) badge.textContent = modelLabel();
   desktopAlerts();
 }
 async function openPerson(id: string) {
   const detail = await api<PersonDetail>(`/api/people/${id}`), p = detail.person; selectedId = id;
   const target = $('person-detail'); target.replaceChildren(el('span', 'CARE IN CONTEXT', 'eyebrow'), el('h2', `${p.name}的最近狀況`));
   if (p.demo) target.append(el('p', '這是合成示範資料，沒有連接實體手機。', 'demo-notice'));
-  const summary = el('section', undefined, 'detail-summary'); summary.append(el('h3', p.assessment.title), el('p', p.assessment.explanation), el('small', `情境觀測 ${ago(p.observedAt)} · 服務收件 ${ago(p.lastSeen)} · 本機規則整理`)); target.append(summary);
+  const summary = el('section', undefined, 'detail-summary'); summary.append(el('h3', p.assessment.title), el('p', p.assessment.explanation), el('small', `情境觀測 ${ago(p.observedAt)} · 服務收件 ${ago(p.lastSeen)} · ${p.assessment.source === 'meta' ? 'Meta 情境判讀' : '本機規則整理'}`)); target.append(summary);
   const evidence = el('section'); evidence.append(el('h3', '支持這個判斷的線索')); const list = el('ul', undefined, 'evidence-list');
   for (const e of p.assessment.evidence) { const item = el('li'); item.append(el('span', e.label), el('time', time(e.observedAt))); list.append(item); } if (!list.children.length) list.append(el('li', '目前沒有可用線索')); evidence.append(list); target.append(evidence);
   if (p.assessment.gaps.length) target.append(el('p', p.assessment.gaps.join('；'), 'gaps'));
@@ -132,7 +138,7 @@ async function openPerson(id: string) {
   }
   target.append(el('div', p.assessment.nextAction, 'next-action'));
   const secretary = el('section', undefined, 'detail-summary'), d = p.secretary.decision;
-  secretary.append(el('h3', `秘書的情境判讀 · ${d.validUntil <= currentTime() ? '需要更新' : '本地證據判讀'}`), el('h4', d.title), el('p', d.reason));
+  secretary.append(el('h3', `秘書的情境判讀 · ${d.validUntil <= currentTime() ? '需要更新' : d.source === 'meta' ? `Meta ${d.model || ''}` : '本地證據判讀'}`), el('h4', d.title), el('p', d.reason));
   for (const e of d.evidence) secretary.append(el('p', `${time(e.observedAt)} · ${e.label}`, 'small'));
   for (const line of [...d.alternatives, ...d.gaps]) secretary.append(el('p', line, 'small'));
   if (p.secretary.confirmation) secretary.append(el('p', `${time(p.secretary.confirmation.observedAt)} 本人已確認：${p.secretary.confirmation.text}`));
@@ -143,18 +149,18 @@ async function openPerson(id: string) {
     if (['question_pending', 'deferred', 'escalated'].includes(c.state)) secretary.append(button('已聯絡並釐清外出情況', async () => { await api(`/api/people/${id}/secretary/resolve`, { caseId: c.id }); await refresh(); await openPerson(id); }, 'secondary'));
   }
   target.append(secretary);
-  const schedule = el('section'), form = el('form'); schedule.append(el('h3', '每日關心時間'), el('p', `依 ${workspace!.timezone} 執行。儲存後從下一個尚未到達的關心時間開始。`, 'muted small'));
+  const schedule = el('section'), form = el('form'); schedule.append(el('h3', '主動關心'), el('p', `依 ${workspace!.timezone} 執行。秘書每天挑方便的時候問候一次；晚上還沒問到會再問一次，深夜不打擾。`, 'muted small'));
   const enabledLabel = el('label', '啟用未報安自動確認'), enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = detail.plan.enabled; enabledLabel.prepend(enabled); enabledLabel.className = 'check-label'; form.append(enabledLabel);
   const contextualLabel = el('label', '啟用情境秘書：看片延後確認、外出變化主動詢問'), contextual = el('input'); contextual.type = 'checkbox'; contextual.checked = detail.plan.contextualEnabled; contextualLabel.prepend(contextual); contextualLabel.className = 'check-label'; form.append(contextualLabel);
   const inputs: Record<string, HTMLInputElement> = {};
-  for (const [key, label, type] of [['timeOfDay', '每日關心時間', 'time'], ['graceMinutes', '先等待幾分鐘', 'number'], ['responseMinutes', '問一題後等幾分鐘', 'number'], ['deferMinutes', '選「晚點回覆」再等幾分鐘', 'number']]) {
-    const wrapper = el('label', label), input = el('input'); input.type = type; input.value = String(detail.plan[key as keyof CarePlan]); input.required = true;
-    if (type === 'number') { input.min = '1'; input.max = '240'; } inputs[key] = input; wrapper.append(input); form.append(wrapper);
+  for (const [key, label, min, max] of [['graceMinutes', '開局後先觀察幾分鐘', '1', '240'], ['responseMinutes', '問一題後等幾分鐘', '1', '240'], ['deferMinutes', '選「晚點回覆」再等幾分鐘', '1', '240'], ['cooldownMinutes', '兩次提問至少相隔幾分鐘', '60', '1440']]) {
+    const wrapper = el('label', label), input = el('input'); input.type = 'number'; input.min = min; input.max = max; input.value = String(detail.plan[key as keyof CarePlan]); input.required = true;
+    inputs[key] = input; wrapper.append(input); form.append(wrapper);
   }
-  const save = el('button', '儲存關心時間', 'secondary'); save.type = 'submit'; save.disabled = p.demo; form.append(save);
+  const save = el('button', '儲存關心設定', 'secondary'); save.type = 'submit'; save.disabled = p.demo; form.append(save);
   form.addEventListener('submit', event => { event.preventDefault(); void action(async () => {
-    await api(`/api/people/${id}/plan`, { enabled: enabled.checked, contextualEnabled: contextual.checked, timeOfDay: inputs.timeOfDay.value, graceMinutes: +inputs.graceMinutes.value, responseMinutes: +inputs.responseMinutes.value, deferMinutes: +inputs.deferMinutes.value });
-    toast('已儲存關心時間'); await refresh(); await openPerson(id);
+    await api(`/api/people/${id}/plan`, { enabled: enabled.checked, contextualEnabled: contextual.checked, graceMinutes: +inputs.graceMinutes.value, responseMinutes: +inputs.responseMinutes.value, deferMinutes: +inputs.deferMinutes.value, cooldownMinutes: +inputs.cooldownMinutes.value });
+    toast('已儲存關心設定'); await refresh(); await openPerson(id);
   }); }); schedule.append(form); target.append(schedule);
   if (detail.care) {
     const flow = el('section'); flow.append(el('h3', `${detail.care.day} 的關心流程 · ${careLabels[detail.care.state]}`), el('p', detail.care.reason));

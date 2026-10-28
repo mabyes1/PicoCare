@@ -25,11 +25,11 @@ export function outingSamples(start: number): ContextSample[] {
   });
 }
 const engine = new LocalSituationInterpreter();
-test('看片判讀需要持續一致的前景 App、播放及可互動線索，保留未知和其他解釋', () => {
+test('看片判讀需要持續一致的前景 App、播放及可互動線索，不硬補旁支猜測', () => {
   const samples = [0, 1, 2].map(i => videoSample(base + i * m));
   const d = engine.evaluate(samples, base + 2 * m);
   assert.equal(d.scenario, 'video'); assert.equal(d.action, 'wait'); assert.equal(d.evidence.length, 3);
-  assert(d.alternatives.some(a => a.includes('自動播放'))); assert(d.gaps.some(g => g.includes('忘記報安')));
+  assert.deepEqual(d.alternatives, []); assert.deepEqual(d.gaps, []);
   assert.equal(engine.evaluate([samples[2]], base + 2 * m).scenario, 'unknown');
   assert.equal(engine.evaluate([samples[0], samples[2]], base + 2 * m).scenario, 'unknown');
   assert.equal(engine.evaluate(samples, base + 5 * m).scenario, 'unknown');
@@ -49,7 +49,7 @@ test('背景音樂、螢幕不可互動、不同 App、缺權限與暫停都不�
 test('連續有效路徑返回先前區域、持續導航及電量下降共同觸發外出確認', () => {
   const samples = outingSamples(base), d = engine.evaluate(samples, base + 8 * m);
   assert.equal(d.scenario, 'outing'); assert.equal(d.action, 'confirm');
-  assert(d.reason.includes('不判定迷路')); assert(d.evidence.every(e => samples.some(s => s.id === e.eventId)));
+  assert(d.reason.includes('想問你是否需要找路協助')); assert(!d.reason.includes('迷路')); assert(d.evidence.every(e => samples.some(s => s.id === e.eventId)));
 });
 test('GPS 漂移、取樣缺口、重複快取與精度不足不製造外出變化', () => {
   for (const mutate of [
@@ -71,7 +71,7 @@ function fixture() {
   let now = base;
   const s = new CareStore(':memory:', () => now), { identity } = s.createWorkspace({ kind: 'personal', label: '情境測試', caregiverName: '家人', timezone: 'UTC' });
   const pair = s.createPairing(identity, { displayName: '媽媽' }), phone = s.enroll({ code: pair.code, requestId: randomUUID() });
-  const plan = { enabled: true, contextualEnabled: true, timeOfDay: '10:00', graceMinutes: 1, responseMinutes: 2, deferMinutes: 2 };
+  const plan = { enabled: true, contextualEnabled: true, graceMinutes: 4, responseMinutes: 2, deferMinutes: 2, cooldownMinutes: 60 };
   s.flow.setPlan(identity, phone.personId, plan);
   const clock = (at: number) => { now = at; };
   const feed = (sample: ContextSample) => { now = sample.at; s.ingest(phone.deviceToken, { eventId: sample.id, kind: 'context', observedAt: now, context: sample.context }); s.flow.tick(); };
@@ -160,6 +160,21 @@ test('重開資料庫保留外出題、判讀證據和期限，不重複主動�
   } finally {
     s.close(); assert.equal(resolve(dirname(directory)), resolve(tmpdir())); assert(basename(directory).startsWith('picocare-secretary-')); rmSync(directory, { recursive: true });
   }
+});
+test('CD 內只問一發：外出問過後，日常問候要等冷卻才開局', () => {
+  const f = fixture(); try {
+    f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, enabled: false });
+    outingSamples(base).forEach(f.feed);
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question!.topic, 'outing');
+    f.reply('outing_ok');
+    assert.equal(f.s.secretary.view(f.phone.personId).outing!.state, 'clarified');
+    f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, enabled: true });
+    f.feed({ id: randomUUID(), at: base + 9 * m, context: empty() });
+    assert.equal(f.s.flow.runView(f.phone.personId), null);
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question, null);
+    f.feed({ id: randomUUID(), at: base + 69 * m, context: empty() });
+    assert.equal(f.s.flow.runView(f.phone.personId)!.state, 'waiting');
+  } finally { f.s.close(); }
 });
 test('來源欄位接受正常手機觀測，拒收未來時間與多餘的控制欄位', () => {
   const f = fixture(); try {

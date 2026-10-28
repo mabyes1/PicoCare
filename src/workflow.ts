@@ -1,43 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import type { CareStore, Identity } from './store.ts';
 import type { DeviceEvent } from './domain.ts';
-import { dayAt, demand, object, text } from './domain.ts';
+import { dayAt, demand, object } from './domain.ts';
 import type { CarePlan, CareRun, CareAlert } from '../shared/protocol.ts';
 import { missedCheckinQuestion, videoQuestion } from './questions.ts';
 
 type Row = Record<string, any>;
 const minute = 60000;
-export const defaultPlan: CarePlan = { enabled: false, contextualEnabled: true, timeOfDay: '10:00', graceMinutes: 15, responseMinutes: 30, deferMinutes: 30 };
+export const defaultPlan: CarePlan = { enabled: false, contextualEnabled: true, graceMinutes: 15, responseMinutes: 30, deferMinutes: 30, cooldownMinutes: 480 };
+// Asking window in the person's workspace timezone: floating daytime greeting,
+// evening fallback so a quiet day still gets one touch, never in deep night.
+const askStart = '07:00', askEnd = '22:00', fallbackAt = '20:00';
 const formatters = new Map<string, Intl.DateTimeFormat>();
 function wall(at: number, zone: string) {
   let fmt = formatters.get(zone);
   if (!fmt) { fmt = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); formatters.set(zone, fmt); }
   const p = Object.fromEntries(fmt.formatToParts(at).map(p => [p.type, p.value]));
-  return { day: `${p.year}-${p.month}-${p.day}`, clock: `${p.hour}:${p.minute}`, utc: Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) };
-}
-const dueCache = new Map<string, number>();
-// Repeated DST times use the first occurrence; skipped times use the next existing local minute.
-export function scheduledAt(now: number, clock: string, zone: string): number {
-  const day = wall(now, zone).day, key = `${day}/${clock}/${zone}`;
-  if (dueCache.has(key)) return dueCache.get(key)!;
-  const approx = Date.parse(`${day}T${clock}:00Z`);
-  const offsets = new Set([-86400000, 0, 86400000].map(d => wall(approx + d, zone).utc - (approx + d)));
-  const candidates = [...offsets].map(offset => approx - offset).filter(t => { const p = wall(t, zone); return p.day === day && p.clock === clock; }).sort((a, b) => a - b);
-  let result = candidates[0];
-  if (result === undefined) {
-    for (let t = approx - 16 * 3600000; t <= approx + 16 * 3600000; t += minute) {
-      const p = wall(t, zone); if (p.day === day && p.clock >= clock) { result = t; break; }
-    }
-  }
-  demand(result !== undefined, '這個時區今天沒有可用的關心時間');
-  if (dueCache.size > 1000) dueCache.clear(); dueCache.set(key, result); return result;
+  return { day: `${p.year}-${p.month}-${p.day}`, clock: `${p.hour}:${p.minute}` };
 }
 
 export class CareWorkflow {
   constructor(privateStore: CareStore) {
     this.s = privateStore;
     this.s.db.exec(`
-      CREATE TABLE IF NOT EXISTS care_plans(person_id TEXT PRIMARY KEY REFERENCES people(id),enabled INTEGER NOT NULL,time_of_day TEXT NOT NULL,grace INTEGER NOT NULL,response INTEGER NOT NULL,defer INTEGER NOT NULL,effective_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS care_plans(person_id TEXT PRIMARY KEY REFERENCES people(id),enabled INTEGER NOT NULL,grace INTEGER NOT NULL,response INTEGER NOT NULL,defer INTEGER NOT NULL,cooldown INTEGER NOT NULL DEFAULT 480,effective_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS care_runs(id TEXT PRIMARY KEY,person_id TEXT NOT NULL REFERENCES people(id),day TEXT NOT NULL,due_at INTEGER NOT NULL,deadline INTEGER,question_id TEXT,state TEXT NOT NULL,reason TEXT NOT NULL,UNIQUE(person_id,day));
       CREATE TABLE IF NOT EXISTS care_steps(id INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL REFERENCES care_runs(id),at INTEGER NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS care_alerts(id TEXT PRIMARY KEY,source_key TEXT NOT NULL UNIQUE,person_id TEXT NOT NULL REFERENCES people(id),run_id TEXT,kind TEXT NOT NULL,created_at INTEGER NOT NULL,read_at INTEGER,resolved_at INTEGER,payload TEXT NOT NULL);
@@ -45,29 +31,41 @@ export class CareWorkflow {
       CREATE INDEX IF NOT EXISTS care_runs_person ON care_runs(person_id,due_at);
     `);
     if (!storeHasColumn(this.s, 'care_plans', 'contextual_enabled')) this.s.db.exec('ALTER TABLE care_plans ADD COLUMN contextual_enabled INTEGER NOT NULL DEFAULT 1');
+    if (!storeHasColumn(this.s, 'care_plans', 'cooldown')) this.s.db.exec('ALTER TABLE care_plans ADD COLUMN cooldown INTEGER NOT NULL DEFAULT 480');
     for (const p of this.s.all('SELECT * FROM people WHERE demo=0 AND help_id IS NOT NULL')) this.alert(p.id, `event:${p.help_id}`, 'help', '本人明確希望照顧者聯絡', undefined, undefined, p.help_at);
   }
   s: CareStore;
   plan(personId: string): CarePlan {
     const r = this.s.get('SELECT * FROM care_plans WHERE person_id=?', personId);
-    return r ? { enabled: !!r.enabled, contextualEnabled: !!r.contextual_enabled, timeOfDay: r.time_of_day, graceMinutes: r.grace, responseMinutes: r.response, deferMinutes: r.defer } : { ...defaultPlan };
+    return r ? { enabled: !!r.enabled, contextualEnabled: !!r.contextual_enabled, graceMinutes: r.grace, responseMinutes: r.response, deferMinutes: r.defer, cooldownMinutes: r.cooldown } : { ...defaultPlan };
+  }
+  cooldownOk(personId: string, cooldownMinutes: number) {
+    const last = this.s.get('SELECT created_at FROM questions WHERE person_id=? ORDER BY created_at DESC LIMIT 1', personId);
+    return !last || this.s.now() - last.created_at >= cooldownMinutes * minute;
   }
   setPlan(identity: Identity, personId: string, value: unknown) {
     const p = this.s.person(identity, personId); demand(!p.demo, '示範對象不啟用自動關心');
-    const b = object(value); demand(Object.keys(b).every(k => ['enabled', 'contextualEnabled', 'timeOfDay', 'graceMinutes', 'responseMinutes', 'deferMinutes'].includes(k)), '關心設定含有不支援的欄位');
+    const b = object(value); demand(Object.keys(b).every(k => ['enabled', 'contextualEnabled', 'timeOfDay', 'graceMinutes', 'responseMinutes', 'deferMinutes', 'cooldownMinutes'].includes(k)), '關心設定含有不支援的欄位');
     demand(typeof b.enabled === 'boolean', '請選擇是否啟用');
     demand(b.contextualEnabled === undefined || typeof b.contextualEnabled === 'boolean', '情境確認設定不正確');
-    const clock = text(b.timeOfDay, '關心時間', 5); demand(/^([01]\d|2[0-3]):[0-5]\d$/.test(clock), '關心時間格式不正確');
     for (const key of ['graceMinutes', 'responseMinutes', 'deferMinutes']) demand(Number.isInteger(b[key]) && (b[key] as number) >= 1 && (b[key] as number) <= 240, '等待時間需為一至 240 分鐘');
+    // Legacy clients send timeOfDay and no cooldown; the clock is ignored and the default cooldown applies.
+    const cooldown = b.cooldownMinutes === undefined ? defaultPlan.cooldownMinutes : b.cooldownMinutes;
+    demand(Number.isInteger(cooldown) && (cooldown as number) >= 60 && (cooldown as number) <= 1440, '冷卻時間需為 60 至 1440 分鐘');
     return this.s.transaction(() => {
       const old = this.plan(personId), contextual = b.contextualEnabled === undefined ? old.contextualEnabled : b.contextualEnabled;
-      const same = JSON.stringify(old) === JSON.stringify({ enabled: b.enabled, contextualEnabled: contextual, timeOfDay: clock, graceMinutes: b.graceMinutes, responseMinutes: b.responseMinutes, deferMinutes: b.deferMinutes });
-      if (same) return old;
+      const next = { enabled: b.enabled, contextualEnabled: contextual, graceMinutes: b.graceMinutes, responseMinutes: b.responseMinutes, deferMinutes: b.deferMinutes, cooldownMinutes: cooldown };
+      if (JSON.stringify(old) === JSON.stringify(next)) return old;
       // Editing a schedule stops future automatic actions, but never dismisses an existing caregiver alert.
       for (const run of this.s.all("SELECT * FROM care_runs WHERE person_id=? AND state IN ('waiting','observing','question_pending','deferred')", personId)) {
-        this.finish(run, 'cancelled', '關心時間已由照顧者修改');
+        this.finish(run, 'cancelled', '關心設定已由照顧者修改');
       }
-      this.s.run('INSERT INTO care_plans(person_id,enabled,time_of_day,grace,response,defer,effective_at,contextual_enabled) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(person_id) DO UPDATE SET enabled=excluded.enabled,time_of_day=excluded.time_of_day,grace=excluded.grace,response=excluded.response,defer=excluded.defer,effective_at=excluded.effective_at,contextual_enabled=excluded.contextual_enabled', personId, b.enabled ? 1 : 0, clock, b.graceMinutes as number, b.responseMinutes as number, b.deferMinutes as number, this.s.now(), contextual ? 1 : 0);
+      // Old databases keep time_of_day NOT NULL without a default; upsert must supply it even though nothing reads it anymore.
+      if (storeHasColumn(this.s, 'care_plans', 'time_of_day')) {
+        this.s.run('INSERT INTO care_plans(person_id,enabled,time_of_day,grace,response,defer,cooldown,effective_at,contextual_enabled) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(person_id) DO UPDATE SET enabled=excluded.enabled,grace=excluded.grace,response=excluded.response,defer=excluded.defer,cooldown=excluded.cooldown,effective_at=excluded.effective_at,contextual_enabled=excluded.contextual_enabled', personId, b.enabled ? 1 : 0, '00:00', b.graceMinutes as number, b.responseMinutes as number, b.deferMinutes as number, cooldown as number, this.s.now(), contextual ? 1 : 0);
+      } else {
+        this.s.run('INSERT INTO care_plans(person_id,enabled,grace,response,defer,cooldown,effective_at,contextual_enabled) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(person_id) DO UPDATE SET enabled=excluded.enabled,grace=excluded.grace,response=excluded.response,defer=excluded.defer,cooldown=excluded.cooldown,effective_at=excluded.effective_at,contextual_enabled=excluded.contextual_enabled', personId, b.enabled ? 1 : 0, b.graceMinutes as number, b.responseMinutes as number, b.deferMinutes as number, cooldown as number, this.s.now(), contextual ? 1 : 0);
+      }
       return this.plan(personId);
     });
   }
@@ -175,16 +173,26 @@ export class CareWorkflow {
           this.step(run, 'question_queued', run.state === 'observing' ? '影音線索改變或延後期限到達，現在詢問本人確認' : '到關心時間仍未報安，已排入一題與手機提醒');
         } else if (run.deadline !== null && this.s.now() >= run.deadline) this.escalate(run, run.state === 'deferred' ? '延後等待結束，仍未收到本人報安' : '回答等待時間結束，仍未釐清近況');
       }
-      for (const p of this.s.all('SELECT p.*,w.timezone,c.* FROM people p JOIN workspaces w ON w.id=p.workspace_id JOIN care_plans c ON c.person_id=p.id WHERE c.enabled=1 AND p.demo=0')) {
-        const due = scheduledAt(this.s.now(), p.time_of_day, p.timezone), day = dayAt(this.s.now(), p.timezone);
-        if (this.s.now() < due || due < p.effective_at || this.s.get('SELECT id FROM care_runs WHERE person_id=? AND day=?', p.id, day)) continue;
+      for (const p of this.s.all('SELECT p.*,w.timezone,c.cooldown FROM people p JOIN workspaces w ON w.id=p.workspace_id JOIN care_plans c ON c.person_id=p.id WHERE c.enabled=1 AND p.demo=0')) {
+        const day = dayAt(this.s.now(), p.timezone);
+        if (this.s.get('SELECT id FROM care_runs WHERE person_id=? AND day=?', p.id, day)) continue;
         if (this.s.get("SELECT id FROM care_runs WHERE person_id=? AND state IN ('waiting','observing','question_pending','deferred','escalated')", p.id) || this.s.get("SELECT id FROM secretary_cases WHERE person_id=? AND state IN ('question_pending','deferred','escalated')", p.id)) continue;
         const satisfied = p.last_checkin !== null && dayAt(p.last_checkin, p.timezone) === day;
-        const state = satisfied ? 'clarified' : p.help_id ? 'resolved' : 'waiting';
-        const reason = satisfied ? '今天已收到本人報安' : p.help_id ? '已有本人求助，交由求助待辦處理' : '到預定關心時間，先等待寬限時間';
+        if (satisfied || p.help_id) {
+          const state = satisfied ? 'clarified' : 'resolved', reason = satisfied ? '今天已收到本人報安' : '已有本人求助，交由求助待辦處理';
+          const run = { id: randomUUID(), person_id: p.id };
+          this.s.run('INSERT INTO care_runs(id,person_id,day,due_at,state,reason) VALUES(?,?,?,?,?,?)', run.id, p.id, day, this.s.now(), state, reason);
+          this.step(run, state, reason); continue;
+        }
+        if (!this.cooldownOk(p.id, Number(p.cooldown ?? defaultPlan.cooldownMinutes))) continue;
+        const clock = wall(this.s.now(), p.timezone).clock;
+        if (clock < askStart || clock >= askEnd) continue;
+        const interactive = p.context_at !== null && this.s.now() - p.context_at <= 120000 && (() => { try { return JSON.parse(p.context_json).screenInteractive === true; } catch { return false; } })();
+        if (!interactive && clock < fallbackAt) continue;
+        const reason = interactive ? '本人正在使用手機，先觀察幾分鐘再決定是否提問' : '今天尚未問候本人，已到晚間保底時間，先觀察再決定';
         const run = { id: randomUUID(), person_id: p.id };
-        this.s.run('INSERT INTO care_runs(id,person_id,day,due_at,state,reason) VALUES(?,?,?,?,?,?)', run.id, p.id, day, due, state, reason);
-        this.step(run, state, reason);
+        this.s.run('INSERT INTO care_runs(id,person_id,day,due_at,state,reason) VALUES(?,?,?,?,?,?)', run.id, p.id, day, this.s.now(), 'waiting', reason);
+        this.step(run, 'waiting', reason);
       }
     });
   }

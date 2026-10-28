@@ -12,7 +12,7 @@ export type PhoneContext = {
   sharing: 'summary' | 'detailed';
 };
 export type SourceState = 'available' | 'disabled' | 'permission_missing' | 'disconnected' | 'no_fix' | 'stale' | 'inaccurate' | 'speed_unavailable' | 'error';
-export type CarePlan = { enabled: boolean; contextualEnabled: boolean; timeOfDay: string; graceMinutes: number; responseMinutes: number; deferMinutes: number };
+export type CarePlan = { enabled: boolean; contextualEnabled: boolean; graceMinutes: number; responseMinutes: number; deferMinutes: number; cooldownMinutes: number };
 export type CareRun = { id: string; day: string; dueAt: number; deadline: number | null; questionId: string | null;
   state: 'waiting' | 'observing' | 'question_pending' | 'deferred' | 'clarified' | 'escalated' | 'resolved' | 'cancelled';
   reason: string; steps: { at: number; kind: string; detail: string }[] };
@@ -20,7 +20,7 @@ export type CareAlert = { id: string; personId: string; personName: string; runI
   createdAt: number; readAt: number | null; resolvedAt: number | null; title: string;
   evidence: string[]; question: string | null; answer: string | null };
 export type Assessment = {
-  source: 'rules'; meta: 'waiting_for_credits'; state: 'fresh' | 'stale' | 'unknown';
+  source: 'rules' | 'meta'; meta: string; state: 'fresh' | 'stale' | 'unknown';
   title: string; explanation: string; evidence: { label: string; observedAt: number }[]; gaps: string[]; nextAction: string;
 };
 export type CareQuestion = {
@@ -41,16 +41,18 @@ export type PersonView = {
   secretary: SecretaryView;
 };
 export type ContextDecision = {
-  source: 'local_evidence'; scenario: 'video' | 'outing' | 'unknown'; action: 'wait' | 'confirm' | 'none';
+  source: 'local_evidence' | 'meta'; model?: string; scenario: 'video' | 'outing' | 'other' | 'unknown'; action: 'wait' | 'confirm' | 'none';
   title: string; reason: string; at: number; validUntil: number;
   evidence: { eventId: string; label: string; observedAt: number }[];
   alternatives: string[]; gaps: string[];
 };
+export type ElseReview = { review: 'clarified' | 'needs_contact' | 'pending'; summary: string };
 export type SecretaryCase = { id: string; state: 'question_pending' | 'deferred' | 'clarified' | 'escalated' | 'resolved' | 'cancelled';
   createdAt: number; deadline: number | null; questionId: string; reason: string; decision: ContextDecision };
 export type SecretaryView = { decision: ContextDecision; outing: SecretaryCase | null;
   confirmation: { topic: string; text: string; observedAt: number } | null };
-export type PeopleResponse = { workspace: Workspace; serverAt: number; people: PersonView[]; alerts: CareAlert[]; meta: { enabled: false; status: string; model: null } };
+export type MetaIntegration = { enabled: boolean; status: string; model: string | null; requestsToday?: number; dailyLimit?: number; lastSuccessAt?: number | null; lastError?: string | null };
+export type PeopleResponse = { workspace: Workspace; serverAt: number; people: PersonView[]; alerts: CareAlert[]; meta: MetaIntegration };
 export type PersonDetail = {
   person: PersonView;
   questions: QuestionRecord[];

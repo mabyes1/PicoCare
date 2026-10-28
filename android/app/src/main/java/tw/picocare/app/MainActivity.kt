@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DatePickerDialog
-import android.app.TimePickerDialog
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.ComponentName
@@ -97,8 +96,8 @@ class MainActivity : Activity() {
         content.addView(button("手機配對") { pairing() })
         content.addView(button("資料來源與分享設定") { sources() })
         content.addView(button("本機證據時間線") { timeline() })
-        content.addView(button("設定我的每日關心時間") { ownPlan() })
-        content.addView(label("情境整理使用本機規則；Meta 等額度到帳後接入。", 12f, Color.rgb(133, 147, 124)))
+        content.addView(button("開啟每日關心") { ownPlan() })
+        content.addView(label("情境猜測的來源與 Meta 連線狀態會顯示在判讀內容中。", 12f, Color.rgb(133, 147, 124)))
         setContentView(ScrollView(this).apply { addView(content) })
         // PhoneWindow needs its decor view before exposing the insets controller.
         if (Build.VERSION.SDK_INT >= 30) window.decorView.windowInsetsController?.setSystemBarsAppearance(WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS)
@@ -152,15 +151,15 @@ class MainActivity : Activity() {
     }
     private fun ownPlan() {
         val config = CareConfig(this)
-        if (!config.selfMode || !config.paired) { toast("先開始自己的秘書並連上服務，才能設定關心時間"); return }
-        val calendar = Calendar.getInstance().apply { add(Calendar.MINUTE, 5) }
-        TimePickerDialog(this, { _, hour, minutes ->
-            val clock = String.format(java.util.Locale.ROOT, "%02d:%02d", hour, minutes)
-            runWork {
-                CareApi(config).call("/api/device/plan", JSONObject().put("enabled", true).put("contextualEnabled", true).put("timeOfDay", clock).put("graceMinutes", 1).put("responseMinutes", 5).put("deferMinutes", 5))
-                CareRuntime.sync(this); "已設定每天 $clock 關心你；看片時會先延後確認"
-            }
-        }, calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE), true).show()
+        if (!config.selfMode || !config.paired) { toast("先開始自己的秘書並連上服務，才能開啟每日關心"); return }
+        AlertDialog.Builder(this).setTitle("每日關心")
+            .setMessage("秘書會在你方便用手機的時候問候；晚上還沒問到會再問一次，深夜不打擾。看片時會先延後確認。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("開啟") { _, _ -> runWork {
+                // 實測用短等待與短冷卻，方便同一天重複驗證；產品預設較長。
+                CareApi(config).call("/api/device/plan", JSONObject().put("enabled", true).put("contextualEnabled", true).put("graceMinutes", 5).put("responseMinutes", 5).put("deferMinutes", 5).put("cooldownMinutes", 60))
+                CareRuntime.sync(this); "已開啟每日關心；秘書會挑方便的時候問候"
+            } }.show()
     }
     private fun renderQuestion(question: JSONObject?) {
         val valid = question != null && question.optLong("expiresAt", 0) > System.currentTimeMillis()

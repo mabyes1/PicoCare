@@ -7,8 +7,8 @@ android {
         applicationId = "tw.picocare.meta"
         minSdk = 26
         targetSdk = 35
-        versionCode = 105
-        versionName = "1.0.0-meta.6"
+        versionCode = 108
+        versionName = "1.0.0-meta.9"
     }
     buildTypes {
         getByName("debug") { signingConfig = null }

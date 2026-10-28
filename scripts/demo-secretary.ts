@@ -10,7 +10,7 @@ const minute = 60000, base = Date.parse('2026-10-27T09:57:00+08:00'); let now = 
 const store = new CareStore(':memory:', () => now);
 const { identity, session } = store.createWorkspace({ kind: 'personal', label: '秘書情境重播（全部合成資料）', caregiverName: 'Demo 家人', timezone: 'Asia/Taipei' });
 const pair = store.createPairing(identity, { displayName: '媽媽（合成）' }), phone = store.enroll({ code: pair.code, requestId: randomUUID() });
-store.flow.setPlan(identity, phone.personId, { enabled: true, contextualEnabled: true, timeOfDay: '10:00', graceMinutes: 1, responseMinutes: 2, deferMinutes: 2 });
+store.flow.setPlan(identity, phone.personId, { enabled: true, contextualEnabled: true, graceMinutes: 4, responseMinutes: 2, deferMinutes: 2, cooldownMinutes: 60 });
 const app = makeServer(store), handler = app.listeners('request')[0] as Parameters<typeof createServer>[1];
 const server = createServer((req, res) => {
   if (req.url === '/demo' && req.method === 'GET') {

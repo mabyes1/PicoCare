@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
 import { CareStore } from './store.ts';
 import { demand, Problem } from './domain.ts';
-import { metaIntegration } from './assessment.ts';
+import { metaConfig } from './meta-api.ts';
+import { MetaSecretary } from './meta-secretary.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const bearer = (req: IncomingMessage) => /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization || '')?.[1];
@@ -28,7 +29,7 @@ export function makeServer(store: CareStore, options: { allowDemo?: boolean; sch
       demand(/^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host), '這個開發服務只接受本機連線', 403);
       if (req.headers.origin) demand(req.headers.origin === `http://${host}`, '來源不符', 403);
       const url = new URL(req.url || '/', `http://${host}`), path = url.pathname, method = req.method;
-      if (method === 'GET' && path === '/health') return json(res, 200, { service: 'PicoCare', version: '0.1.0', meta: metaIntegration });
+      if (method === 'GET' && path === '/health') return json(res, 200, { service: 'PicoCare', version: '0.1.0', meta: store.metaStatus() });
       if (method === 'POST' && path === '/api/workspaces') {
         const created = store.createWorkspace(await body(req));
         res.setHeader('Set-Cookie', `picocare_session=${created.session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`);
@@ -77,17 +78,19 @@ export function makeServer(store: CareStore, options: { allowDemo?: boolean; sch
       else res.end();
     }
   });
-  const tick = () => { try { store.flow.tick(); } catch (error) { console.error('Care scheduler failed:', error instanceof Error ? error.message : 'unknown'); } };
+  const tick = () => { try { store.flow.tick(); void store.secretary.model?.tick().catch(() => console.error('Meta scheduler failed')); } catch (error) { console.error('Care scheduler failed:', error instanceof Error ? error.name : 'unknown'); } };
   let timer: ReturnType<typeof setInterval> | undefined;
   server.on('listening', () => { tick(); timer = setInterval(tick, options.schedulerIntervalMs ?? 5000); timer.unref(); });
-  server.on('close', () => { if (timer) clearInterval(timer); });
+  server.on('close', () => { if (timer) clearInterval(timer); store.secretary.model?.close(); });
   return server;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const store = new CareStore(process.env.PICOCARE_DB || join(root, '.local/care.sqlite'));
+  store.secretary.model = new MetaSecretary(store, metaConfig());
+  store.metaElseReviewer = (args) => store.secretary.model!.reviewElse(args);
   const server = makeServer(store, { allowDemo: process.argv.includes('--demo') });
   const port = Number(process.env.PORT || 4317);
-  server.listen(port, '127.0.0.1', () => console.log(`PicoCare: http://127.0.0.1:${port} · Meta waiting for credits`));
+  server.listen(port, '127.0.0.1', () => console.log(`PicoCare: http://127.0.0.1:${port} · Meta ${store.metaStatus().status}`));
   const stop = () => server.close(() => { store.close(); process.exit(0); });
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
 }

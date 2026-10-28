@@ -7,7 +7,7 @@ import type { Context, DeviceEvent } from './domain.ts';
 import { LocalContextProvider, metaIntegration } from './assessment.ts';
 import { ELSE_ID, MAX_ELSE_LENGTH, localQuestion } from './questions.ts';
 import type { QuestionDraft, QuestionOption } from './questions.ts';
-import type { QuestionRecord } from '../shared/protocol.ts';
+import type { QuestionRecord, MetaIntegration, ElseReview } from '../shared/protocol.ts';
 import { CareWorkflow } from './workflow.ts';
 import { Secretary } from './secretary.ts';
 
@@ -22,6 +22,7 @@ export class CareStore {
   provider = new LocalContextProvider();
   flow: CareWorkflow;
   secretary: Secretary;
+  metaElseReviewer: ((args: { personId: string; questionId: string; prompt: string; options: { label: string }[]; elseText: string }) => Promise<ElseReview | null>) | null = null;
   constructor(path: string, now: () => number = Date.now) {
     this.now = now;
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -62,7 +63,8 @@ export class CareStore {
     try { const value = work(); this.db.exec('COMMIT'); return value; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  close(): void { this.db.close(); }
+  close(): void { this.secretary.model?.close(); this.db.close(); }
+  metaStatus(): MetaIntegration { return this.secretary.model?.status() || metaIntegration; }
   createWorkspace(value: unknown): { identity: Identity; session: string } {
     const b = object(value), label = text(b.label, '空間名稱', 60), caregiverName = text(b.caregiverName, '照顧者名稱', 40);
     const kind = oneOf(b.kind, ['personal', 'institution'], '使用方式');
@@ -172,7 +174,7 @@ export class CareStore {
   }
   applyEvent(personId: string, event: DeviceEvent) {
     const serialized = canonical(event);
-    return this.transaction(() => {
+    const result = this.transaction(() => {
       const previous = this.get('SELECT * FROM events WHERE person_id=? AND event_id=?', personId, event.eventId);
       if (previous) {
         demand(previous.body === serialized, '同一事件代碼的內容不同', 409);
@@ -220,14 +222,47 @@ export class CareStore {
       this.secretary.onEvent(personId, event, answerReview);
       return { receiptId, eventId: event.eventId, status: 'recorded', receivedAt: this.now(), duplicate: false };
     });
+    // ELSE review runs after the transaction commits, never inside it:
+    // the answer and its pending escalation are already stored, so a
+    // Meta failure can never lose a help request.
+    if (event.kind === 'question_answer' && event.optionId === ELSE_ID && event.elseText && !result.duplicate) {
+      void this.applyMetaElseReview(event.questionId!).catch(() => undefined);
+    }
+    return result;
+  }
+  async applyMetaElseReview(questionId: string, reviewer?: (args: { personId: string; questionId: string; prompt: string; options: { label: string }[]; elseText: string }) => Promise<ElseReview | null>): Promise<ElseReview | null> {
+    const useReviewer = reviewer || this.metaElseReviewer || (this.secretary.model ? (args: { personId: string; questionId: string; prompt: string; options: { label: string }[]; elseText: string }) => this.secretary.model!.reviewElse(args) : null);
+    if (!useReviewer) return null;
+    const q = this.get('SELECT * FROM questions WHERE id=?', questionId);
+    if (!q || !q.answer_json) return null;
+    const answer = JSON.parse(q.answer_json);
+    if (answer.optionId !== 'else' || answer.review !== 'pending' || typeof answer.elseText !== 'string' || !answer.elseText) return null;
+    const reviewed = await useReviewer({ personId: q.person_id, questionId, prompt: q.prompt, options: JSON.parse(q.options_json).map((o: { label: string }) => ({ label: o.label })), elseText: answer.elseText });
+    if (!reviewed || reviewed.review === 'pending') return null;
+    // Original text is never overwritten; only review and a summary are added.
+    const updated = { ...answer, review: reviewed.review, metaElseSummary: reviewed.summary };
+    this.run('UPDATE questions SET answer_json=? WHERE id=?', JSON.stringify(updated), questionId);
+    if (reviewed.review === 'clarified') {
+      const run = this.get('SELECT * FROM care_runs WHERE question_id=? AND state=?', questionId, 'escalated');
+      if (run) this.flow.finish(run, 'clarified', `Meta 整理：${reviewed.summary}（本人原話保留）`);
+      const sec = this.get('SELECT * FROM secretary_cases WHERE question_id=? AND state=?', questionId, 'escalated');
+      if (sec) this.secretary.finish(sec, 'clarified', `本人已確認：${reviewed.summary}（原話保留）`);
+    } else if (reviewed.review === 'needs_contact') {
+      let helpId = `else:${questionId}`;
+      for (const e of this.all("SELECT * FROM events WHERE person_id=? AND kind='question_answer'", q.person_id)) {
+        try { if (JSON.parse(e.body).questionId === questionId) { helpId = e.event_id; break; } } catch { /* ignore malformed event bodies */ }
+      }
+      this.run('UPDATE people SET help_id=?,help_at=? WHERE id=?', helpId, this.now(), q.person_id);
+    }
+    return reviewed;
   }
   projection(person: Row, timezone: string) {
     const now = this.now(), context: Context | null = person.context_json ? JSON.parse(person.context_json) : null;
     let assessment = this.provider.assess(context, person.context_at, now);
     const secretary = this.secretary.view(person.id), d = secretary.decision;
-    if (d.action !== 'none' && d.validUntil > now) assessment = { ...assessment, title: d.title, explanation: d.reason,
+    if ((d.source === 'meta' || d.action !== 'none') && d.validUntil > now) assessment = { ...assessment, source: d.source === 'meta' ? 'meta' : 'rules', meta: this.metaStatus().status, title: d.title, explanation: d.reason,
       evidence: [...d.evidence.map(e => ({ label: e.label, observedAt: e.observedAt })), ...assessment.evidence], gaps: d.gaps,
-      nextAction: d.action === 'wait' ? '先延後確認；播放線索改變或等待期限到達後，再問本人' : '已優先向本人確認，查看原始回答與外出確認進度' };
+      nextAction: d.action === 'wait' ? '先延後確認；播放線索改變或等待期限到達後，再問本人' : d.action === 'confirm' ? '已優先向本人確認，查看原始回答與外出確認進度' : '保留情境猜測；依原本關心流程，必要時由本人確認' };
     if (secretary.confirmation && secretary.confirmation.observedAt >= d.at && now - secretary.confirmation.observedAt <= 1800000) assessment = { ...assessment,
       title: '本人已確認這一題的近況', explanation: secretary.confirmation.text, nextAction: '保留本人原話；後續依新的證據與求助處理' };
     const checkin = person.last_checkin && dayAt(person.last_checkin, timezone) === dayAt(now, timezone) ? 'reported' : 'awaiting';
@@ -238,7 +273,7 @@ export class CareStore {
       facts: context, assessment, care: this.flow.runView(person.id), secretary };
   }
   list(identity: Identity) {
-    return { workspace: identity, meta: metaIntegration, serverAt: this.now(),
+    return { workspace: identity, meta: this.metaStatus(), serverAt: this.now(),
       people: this.all('SELECT * FROM people WHERE workspace_id=? ORDER BY help_at DESC,name', identity.workspaceId).map(p => this.projection(p, identity.timezone)), alerts: this.flow.alerts(identity) };
   }
   detail(identity: Identity, personId: string) {
@@ -292,7 +327,7 @@ export class CareStore {
     const pending = this.all("SELECT id,created_at,expires FROM reminders WHERE person_id=? AND result='pending' AND expires>? ORDER BY created_at", person.id, this.now());
     const openQuestion = this.get("SELECT * FROM questions WHERE person_id=? AND status='open' AND expires>? ORDER BY created_at DESC LIMIT 1", person.id, this.now());
     return { personName: person.name, checkin: projection.checkin, helpOpen: projection.helpOpen, lastCheckin: person.last_checkin,
-      lastSeen: person.last_seen, meta: metaIntegration, serverAt: this.now(), enrollmentMode: person.enrollment_mode,
+      lastSeen: person.last_seen, meta: this.metaStatus(), serverAt: this.now(), enrollmentMode: person.enrollment_mode,
       caregiverConnected: person.enrollment_mode !== 'self',
       assessment: projection.assessment, secretary: projection.secretary, observedAt: person.context_at, plan: this.flow.plan(person.id),
       question: openQuestion ? this.questionView(openQuestion) : null,

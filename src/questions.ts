@@ -18,8 +18,16 @@ export function outingQuestion(): QuestionDraft {
     { id: 'busy', label: '現在不方便回答，晚點再說', intent: 'defer' }
   ] };
 }
+export function metaOutingQuestion(title: string): QuestionDraft {
+  const clean = title.trim().replace(/[。？]$/, '');
+  return { topic: 'outing', prompt: `${clean}，現在還順利嗎？`, options: [
+    { id: 'outing_ok', label: '我還在逛，暫時不需要幫忙', intent: 'clarify' },
+    { id: 'outing_contact', label: '我在找路，請家人聯絡我', intent: 'needs_contact' },
+    { id: 'busy', label: '現在不方便回答，晚點再說', intent: 'defer' }
+  ] };
+}
 export function missedCheckinQuestion(): QuestionDraft {
-  return { prompt: '今天預定的報安還沒收到，現在方便回覆一下嗎？', options: [
+  return { prompt: '今天還沒收到你的報安，現在方便回覆一下嗎？', options: [
     { id: 'report_ok', label: '我目前不需要協助', intent: 'report_ok' },
     { id: 'busy', label: '我現在忙，晚點回覆', intent: 'defer' },
     { id: 'contact', label: '請照顧者聯絡我', intent: 'needs_contact' }

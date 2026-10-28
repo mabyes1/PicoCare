@@ -26,19 +26,24 @@ object SelfInsight {
     fun interpretation(server: JSONObject, estimatedServerNow: Long): String {
         val secretary = server.optJSONObject("secretary"); val d = secretary?.optJSONObject("decision")
         if (d == null) return "還沒收到秘書判讀。手機資料可以先留在本機；連上服務後才會產生服務端的情境猜測。"
-        val lines = mutableListOf(if (d.optLong("validUntil") <= estimatedServerNow) "上次的猜測（需要更新）" else "目前的猜測", d.optString("title"), "判讀時間：${time(d.optLong("at"))}", d.optString("reason"))
+        val lines = mutableListOf(if (d.optLong("validUntil") <= estimatedServerNow) "上次的猜測（需要更新）" else "目前的猜測", d.optString("title"), "判讀時間：${time(d.optLong("at"))}")
+        d.optString("reason").takeIf { it.isNotBlank() }?.let { lines.add(it) }
         val evidence = d.optJSONArray("evidence")
         if (evidence != null && evidence.length() > 0) {
             lines.add("依據：")
             for (i in 0 until evidence.length()) { val e = evidence.getJSONObject(i); lines.add("• ${e.optString("label")}（${time(e.optLong("observedAt"))}）") }
         }
-        for ((key, title) in listOf("alternatives" to "也可能是", "gaps" to "仍不知道")) {
+        for ((key, title) in listOf("alternatives" to "補充", "gaps" to "需要確認")) {
             val items = d.optJSONArray(key)
             if (items != null && items.length() > 0) { lines.add("$title："); for (i in 0 until items.length()) lines.add("• ${items.getString(i)}") }
         }
         secretary?.optJSONObject("confirmation")?.let { lines.add("你的原始回答：${it.optString("text")}（${time(it.optLong("observedAt"))}）") }
         secretary?.optJSONObject("outing")?.let { lines.add("外出確認進度：${it.optString("reason")}") }
-        lines.add("目前由本地證據規則判讀；Meta 等額度到帳後接入。")
+        lines.add(if (d.optString("source") == "meta") "判讀來源：Meta ${d.optString("model")}" else "判讀來源：本地證據規則。")
+        server.optJSONObject("meta")?.let { meta ->
+            val state = mapOf("not_configured" to "尚未設定", "disabled" to "未啟用", "key_missing" to "後端缺少 Key", "ready" to "已設定，等待判讀", "connecting" to "判讀中", "active" to "已連線", "fallback" to "API 暫不可用，使用本地規則", "daily_limit" to "今日次數上限，使用本地規則")[meta.optString("status")] ?: meta.optString("status")
+            lines.add("Meta 連線：$state")
+        }
         return lines.joinToString("\n")
     }
 }

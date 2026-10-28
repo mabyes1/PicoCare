@@ -25,8 +25,8 @@ test('手機只看到自己的判讀、問題與原話，可設定自己的關�
     const status = s.deviceStatus(a.deviceToken), other = s.deviceStatus(b.deviceToken);
     assert.equal(status.personName, 'Ken'); assert.equal(status.caregiverConnected, false); assert(status.assessment.evidence.some(e => e.label.includes('66%')));
     assert.equal(other.observedAt, null); assert.equal(status.enrollmentMode, 'self');
-    const plan = s.selfPlan(a.deviceToken, { enabled: true, contextualEnabled: true, timeOfDay: '17:00', graceMinutes: 1, responseMinutes: 5, deferMinutes: 5 });
-    assert.equal(plan.timeOfDay, '17:00'); assert.equal(s.deviceStatus(b.deviceToken).plan.enabled, false);
+    const plan = s.selfPlan(a.deviceToken, { enabled: true, contextualEnabled: true, graceMinutes: 1, responseMinutes: 5, deferMinutes: 5, cooldownMinutes: 120 });
+    assert.equal(plan.cooldownMinutes, 120); assert.equal(s.deviceStatus(b.deviceToken).plan.enabled, false);
     s.ingest(a.deviceToken, { eventId: randomUUID(), kind: 'help', observedAt: now });
     assert.equal(s.deviceStatus(a.deviceToken).helpOpen, true); assert.equal(s.deviceStatus(a.deviceToken).caregiverConnected, false);
   } finally { s.close(); }

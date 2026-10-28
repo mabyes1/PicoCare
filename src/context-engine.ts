@@ -18,10 +18,11 @@ export class LocalSituationInterpreter implements SituationInterpreter {
   evaluate(input: ContextSample[], now: number): ContextDecision {
     const samples = [...input].filter(s => s.at <= now && now - s.at <= 45 * minute).sort((a, b) => a.at - b.at);
     const latest = samples.at(-1);
-    const base: ContextDecision = { source: 'local_evidence', scenario: 'unknown', action: 'none', title: '目前線索不足以選擇特定生活情境',
-      reason: '維持原本關心流程，等待可用證據。', at: now, validUntil: now + 2 * minute, evidence: [], alternatives: [], gaps: [] };
-    if (!latest || !fresh(latest.at, now)) return { ...base, gaps: ['缺少兩分鐘內的情境觀測'] };
+    const base: ContextDecision = { source: 'local_evidence', scenario: 'unknown', action: 'none', title: '等手機更新',
+      reason: '', at: now, validUntil: now + 2 * minute, evidence: [], alternatives: [], gaps: [] };
+    if (!latest || !fresh(latest.at, now)) return base;
     const c = latest.context;
+    base.title = c.screenInteractive === false ? '手機螢幕已關閉' : c.screenInteractive === true ? '手機螢幕開啟' : '手機狀態已更新';
     // Build a contiguous series of independent fixes. Re-uploading a cached fix is not another movement sample.
     let points: (ContextSample & { fix: NonNullable<PhoneContext['location']> })[] = [];
     for (const s of samples) {
@@ -49,13 +50,13 @@ export class LocalSituationInterpreter implements SituationInterpreter {
     const draining = c.batteryPercent !== null && c.batteryPercent <= 15 && c.charging === false && earlierBattery?.context.batteryPercent !== null && earlierBattery !== undefined && earlierBattery.context.batteryPercent! - c.batteryPercent >= 5;
     if (c.location && c.location.accuracy <= 50 && ['available', 'speed_unavailable'].includes(c.sources?.location || '') && first && last && c.location.observedAt === last.fix.observedAt && fresh(last.fix.observedAt, now) && points.length >= 8 && last.fix.observedAt - first.fix.observedAt >= 8 * minute && travelled >= 400 && revisit && navigation && draining) {
       return { ...base, scenario: 'outing', action: 'confirm', title: '外出行程出現值得確認的變化',
-        reason: '近期有效定位重複經過同一區域，導航仍存在，且手機電量偏低並持續下降。先問本人，不判定迷路。',
+        reason: '剛才繞回同一個區域，導航還開著，電量也偏低。想問你是否需要找路協助。',
         evidence: [
           { eventId: first.id, observedAt: first.fix.observedAt, label: `路徑開始；共 ${points.length} 個不同定位，扣除精度誤差後移動至少 ${Math.round(travelled)}m` },
           { eventId: last.id, observedAt: last.fix.observedAt, label: '離開後再次回到先前區域；定位間隔均不超過三分鐘、精度均在 50m 內' },
           { eventId: latest.id, observedAt: navigation.observedAt, label: '取樣時仍有導航通知' },
           { eventId: latest.id, observedAt: latest.at, label: `手機電量 ${c.batteryPercent}%，未充電；較前段降低至少 5 個百分點` }
-        ], alternatives: ['可能刻意繞圈散步、逛街或找路；需要本人說明'], gaps: ['無法僅從路徑確認本人是否遇到困難'] };
+        ], alternatives: [], gaps: [] };
     }
     if (hasVideo(latest, now)) {
       const chain: ContextSample[] = [latest];
@@ -65,14 +66,12 @@ export class LocalSituationInterpreter implements SituationInterpreter {
         if (s.at < next.at) chain.unshift(s);
       }
       if (chain.length >= 3 && latest.at - chain[0].at >= 2 * minute) return { ...base, scenario: 'video', action: 'wait', title: '可能正在看影片，先延後確認',
-        reason: '影音 App 在前景、播放狀態及裝置可互動線索持續一致，可能暫時投入其中。仍未收到本人確認。',
+        reason: '影片已持續播放兩分鐘，晚點再提醒報安。',
         evidence: [ { eventId: chain[0].id, observedAt: chain[0].at, label: '開始觀測到一致的影音使用線索' },
           { eventId: latest.id, observedAt: c.usage!.observedAt, label: '影音 App 仍在前景，裝置可互動' },
           { eventId: latest.id, observedAt: c.media!.observedAt, label: '同一 App 的媒體播放狀態為播放中' } ],
-        alternatives: ['可能自動播放、他人使用，或本人沒有注意畫面'], gaps: ['尚不能確認忘記報安，需本人回答'] };
+        alternatives: [], gaps: [] };
     }
-    if (c.sources?.usage !== 'available' || c.sources?.media !== 'available') base.gaps.push('前景 App／媒體播放來源未同時可用');
-    if (!first || !last || points.length < 8) base.gaps.push('缺少足夠的連續精確位置，無法判讀路徑變化');
     return base;
   }
 }

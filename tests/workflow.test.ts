@@ -7,36 +7,37 @@ import { tmpdir } from 'node:os';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CareStore } from '../src/store.ts';
-import { scheduledAt } from '../src/workflow.ts';
 import { makeServer } from '../src/server.ts';
 import { LocalContextProvider } from '../src/assessment.ts';
 import type { Context } from '../src/domain.ts';
 
 const base = Date.parse('2026-10-27T09:59:00Z'), m = 60000;
+const interactive = (): Context => ({ batteryPercent: 80, charging: false, network: 'online', screenInteractive: true, ringer: 'normal', motion: 'unknown', location: null, notifications: [], sharing: 'summary' });
 function fixture(path = ':memory:') {
   let now = base;
   const s = new CareStore(path, () => now);
   const { identity, session } = s.createWorkspace({ kind: 'personal', label: '測試', caregiverName: '家人', timezone: 'UTC' });
   const pair = s.createPairing(identity, { displayName: '媽媽' }), phone = s.enroll({ code: pair.code, requestId: randomUUID() });
-  const plan = { enabled: true, timeOfDay: '10:00', graceMinutes: 1, responseMinutes: 2, deferMinutes: 3 };
+  const plan = { enabled: true, graceMinutes: 1, responseMinutes: 2, deferMinutes: 3, cooldownMinutes: 60 };
   s.flow.setPlan(identity, phone.personId, plan);
   const at = (minutes: number) => { now = base + minutes * m; return now; };
-  const event = (kind: string, data: Record<string, unknown> = {}) => s.ingest(phone.deviceToken, { eventId: randomUUID(), kind, observedAt: now, ...data });
+  const event = (kind: string, data: Record<string, unknown> = {}, token = phone.deviceToken) => s.ingest(token, { eventId: randomUUID(), kind, observedAt: now, ...data });
+  const convenient = (token = phone.deviceToken) => event('context', { context: interactive() }, token);
   const question = () => s.deviceStatus(phone.deviceToken).question!;
   const answer = (optionId: string, extra: Record<string, unknown> = {}) => event('question_answer', { questionId: question().id, optionId, ...extra });
-  const ask = () => { at(1); s.flow.tick(); at(2); s.flow.tick(); return question(); };
-  return { s, phone, identity, session, plan, at, event, question, answer, ask, clock: () => now };
+  const ask = () => { convenient(); s.flow.tick(); at(1); s.flow.tick(); return question(); };
+  return { s, phone, identity, session, plan, at, event, convenient, question, answer, ask, clock: () => now };
 }
 
-test('預定關心、寬限、問一題、等待、超時只產生一份可讀可處理的提醒', () => {
+test('日常問候只在方便時開局；逾時只產生一份可讀可處理的提醒', () => {
   const f = fixture(); try {
     f.s.flow.tick(); assert.equal(f.s.flow.runView(f.phone.personId), null);
-    f.at(1); f.s.flow.tick(); assert.equal(f.s.flow.runView(f.phone.personId)!.state, 'waiting');
+    f.convenient(); f.s.flow.tick(); assert.equal(f.s.flow.runView(f.phone.personId)!.state, 'waiting');
     assert.equal(f.s.flow.alerts(f.identity).length, 0);
-    f.at(2); f.s.flow.tick(); const q = f.question(); assert.match(q.prompt, /預定的報安/);
+    f.at(1); f.s.flow.tick(); const q = f.question(); assert.match(q.prompt, /今天還沒收到你的報安/);
     f.s.flow.tick(); assert.equal(f.question().id, q.id); assert.equal(f.s.deviceStatus(f.phone.deviceToken).reminders.length, 1);
-    f.at(3); f.s.flow.tick(); assert.equal(f.s.flow.alerts(f.identity).length, 0);
-    f.at(4); f.s.flow.tick(); f.s.flow.tick();
+    f.at(2); f.s.flow.tick(); assert.equal(f.s.flow.alerts(f.identity).length, 0);
+    f.at(3); f.s.flow.tick(); f.s.flow.tick();
     const alerts = f.s.flow.alerts(f.identity); assert.equal(alerts.length, 1); assert.match(alerts[0].title, /尚未由手機回報/);
     assert.equal(f.s.deviceStatus(f.phone.deviceToken).question, null);
     f.s.flow.read(f.identity, alerts[0].id); assert(f.s.flow.alerts(f.identity)[0].readAt);
@@ -59,9 +60,9 @@ test('本人正常回答結束關心；不重問、不產生照顧者提醒', ()
 test('忙碌延長等待，期間不再問第二題；延期後仍沒報安才提醒', () => {
   const f = fixture(); try {
     f.ask(); f.answer('busy'); assert.equal(f.s.flow.runView(f.phone.personId)!.state, 'deferred');
-    f.at(4); f.s.flow.tick(); assert.equal(f.s.flow.alerts(f.identity).length, 0);
+    f.at(2); f.s.flow.tick(); assert.equal(f.s.flow.alerts(f.identity).length, 0);
     assert.equal(f.s.get('SELECT count(*) n FROM questions')!.n, 1);
-    f.at(5); f.s.flow.tick(); assert.equal(f.s.flow.alerts(f.identity).length, 1);
+    f.at(4); f.s.flow.tick(); assert.equal(f.s.flow.alerts(f.identity).length, 1);
     assert.match(f.s.flow.alerts(f.identity)[0].title, /延後等待/);
     assert.match(f.s.flow.alerts(f.identity)[0].title, /本人已回答/);
     assert.equal(f.s.deviceStatus(f.phone.deviceToken).reminders.length, 0);
@@ -141,23 +142,42 @@ test('設定修改、停用與跨空間權限不會暗中消除待處理提醒',
     assert.throws(() => f.s.flow.read(other, alert.id), /找不到/);
     assert.throws(() => f.s.flow.setPlan(other, f.phone.personId, f.plan), /找不到/);
     assert.throws(() => f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, responseMinutes: 0 }), /一至/);
+    assert.throws(() => f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, cooldownMinutes: 30 }), /冷卻/);
+    const legacy = f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, timeOfDay: '10:00' });
+    assert(!('timeOfDay' in legacy)); assert.equal(legacy.cooldownMinutes, 60);
+    const { cooldownMinutes: _dropped, ...withoutCooldown } = f.plan;
+    assert.equal(f.s.flow.setPlan(f.identity, f.phone.personId, { ...withoutCooldown, timeOfDay: '10:00' }).cooldownMinutes, 480);
     assert.throws(() => f.s.contact(f.identity, f.phone.personId, { outcome: 'care_resolved', runId: randomUUID() }), /已有更新/);
   } finally { f.s.close(); }
 });
 
-test('同日已有報安不再問；新啟用已錯過的時間從明天開始', () => {
+test('同日已有報安不再問；白天啟用當天就能問', () => {
   const f = fixture(); try {
-    f.event('checkin'); f.at(1); f.s.flow.tick(); f.at(4); f.s.flow.tick();
+    f.event('checkin'); f.convenient(); f.s.flow.tick();
     assert.equal(f.s.flow.runView(f.phone.personId)!.state, 'clarified'); assert.equal(f.s.deviceStatus(f.phone.deviceToken).question, null);
-    f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, timeOfDay: '09:00' });
-    f.s.flow.tick(); assert.equal(f.s.get('SELECT count(*) n FROM care_runs')!.n, 1);
+    const pair = f.s.createPairing(f.identity, { displayName: '爸爸' }), phone = f.s.enroll({ code: pair.code, requestId: randomUUID() });
+    f.s.flow.setPlan(f.identity, phone.personId, { ...f.plan, enabled: false });
+    f.convenient(phone.deviceToken); f.s.flow.tick(); assert.equal(f.s.flow.runView(phone.personId), null);
+    f.s.flow.setPlan(f.identity, phone.personId, { ...f.plan, enabled: true });
+    f.s.flow.tick(); assert.equal(f.s.flow.runView(phone.personId)!.state, 'waiting');
   } finally { f.s.close(); }
 });
 
-test('關心時間依個人空間時區，處理夏令時間跳時與重複時間', () => {
-  assert.equal(scheduledAt(base, '10:00', 'Asia/Taipei'), Date.parse('2026-10-27T02:00:00Z'));
-  assert.equal(scheduledAt(Date.parse('2026-03-08T15:00:00Z'), '02:30', 'America/New_York'), Date.parse('2026-03-08T07:00:00Z'));
-  assert.equal(scheduledAt(Date.parse('2026-11-01T15:00:00Z'), '01:30', 'America/New_York'), Date.parse('2026-11-01T05:30:00Z'));
+test('白天不方便只蒐集不問；晚上保底問一次；深夜不開新題', () => {
+  const f = fixture(); try {
+    f.event('context', { context: { ...interactive(), screenInteractive: false } }); f.s.flow.tick();
+    assert.equal(f.s.flow.runView(f.phone.personId), null);
+    f.at(606); f.s.flow.tick();
+    assert.equal(f.s.flow.runView(f.phone.personId)!.state, 'waiting');
+    assert.match(f.s.flow.runView(f.phone.personId)!.reason, /保底/);
+  } finally { f.s.close(); }
+  const g = fixture(); try {
+    g.at(781); g.convenient(); g.s.flow.tick();
+    assert.equal(g.s.flow.runView(g.phone.personId), null);
+    g.at(1291); g.convenient(); g.s.flow.tick();
+    assert.equal(g.s.flow.runView(g.phone.personId)!.state, 'waiting');
+    assert.match(g.s.flow.runView(g.phone.personId)!.reason, /正在使用手機/);
+  } finally { g.s.close(); }
 });
 
 test('來源時間、速度誤差與授權缺口保留，持續導航不以發布時間判定失效', () => {
@@ -180,7 +200,7 @@ test('HTTP 排程在沒有使用者輪詢時照樣產生提醒，API 可讀取�
   const address = server.address(); assert(address && typeof address !== 'string'); const baseUrl = `http://127.0.0.1:${address.port}`;
   const headers = { Cookie: `picocare_session=${f.session}`, 'Content-Type': 'application/json' };
   try {
-    f.at(2); await delay(100); assert(f.s.deviceStatus(f.phone.deviceToken).question);
+    f.convenient(); f.at(1); await delay(100); f.at(2); await delay(100); assert(f.s.deviceStatus(f.phone.deviceToken).question);
     f.at(5); await delay(100);
     const response = await fetch(baseUrl + '/api/alerts', { headers }); assert.equal(response.status, 200);
     const result = await response.json(); assert.equal(result.alerts.length, 1);
@@ -191,6 +211,28 @@ test('HTTP 排程在沒有使用者輪詢時照樣產生提醒，API 可讀取�
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); f.s.close(); }
 });
 
+test('舊版關心表可照常儲存新設定，沿用既有啟用狀態', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'picocare-legacy-plan-')), path = join(directory, 'care.sqlite');
+  const f = fixture(path); let reopened: CareStore | undefined;
+  try {
+    const personId = f.phone.personId; f.s.close();
+    const raw = new CareStore(path, f.clock);
+    raw.db.exec('DROP TABLE care_plans');
+    raw.db.exec('CREATE TABLE care_plans(person_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL,time_of_day TEXT NOT NULL,grace INTEGER NOT NULL,response INTEGER NOT NULL,defer INTEGER NOT NULL,effective_at INTEGER NOT NULL)');
+    raw.db.exec("INSERT INTO care_plans VALUES('" + personId + "',1,'05:50',1,5,5," + f.clock() + ')');
+    raw.close();
+    reopened = new CareStore(path, f.clock);
+    assert.equal(reopened.flow.plan(personId).cooldownMinutes, 480);
+    const saved = reopened.flow.setPlan(f.identity, personId, { enabled: true, contextualEnabled: true, graceMinutes: 5, responseMinutes: 5, deferMinutes: 5, cooldownMinutes: 60 });
+    assert.equal(saved.cooldownMinutes, 60); assert.equal(saved.graceMinutes, 5);
+    assert.equal(reopened.get('SELECT time_of_day t FROM care_plans WHERE person_id=?', personId)!.t, '05:50');
+    assert.equal(reopened.flow.plan(personId).enabled, true);
+  } finally {
+    (reopened || f.s).close();
+    assert.equal(resolve(dirname(directory)), resolve(tmpdir())); assert(basename(directory).startsWith('picocare-legacy-plan-'));
+    rmSync(directory, { recursive: true });
+  }
+});
 test('既有資料庫增加問題連結與關心表，配對及未處理求助都保留', () => {
   const directory = mkdtempSync(join(tmpdir(), 'picocare-upgrade-')), path = join(directory, 'care.sqlite');
   const f = fixture(path); let reopened: CareStore | undefined;
