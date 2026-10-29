@@ -1,6 +1,7 @@
 import { AbsoluteFill, Sequence } from 'remotion';
 import React from 'react';
-import { BulletCard, CaptionBar, FootageSlot, TitleCard } from './cards';
+import { BulletCard, CaptionBar, TitleCard } from './cards';
+import { CareScreen, WallScreen, WeeklyScreen } from './phone';
 
 // 3-minute submission video, 1920x1080 @30fps = 5400 frames.
 // FootageSlot entries are swapped for real device recordings before render.
@@ -14,22 +15,22 @@ export const Main: React.FC = () => {
         <BulletCard head="家人擔心，但不想打擾" enHead="Families worry, but don't want to intrude" lines={['獨居長輩一天沒消息，家人只能乾著急', '監控 App 侵犯隱私，定時問候又像查勤', 'PicoCare：只看手機線索，有發現才開口']} />
       </Sequence>
       <Sequence from={900} durationInFrames={600}>
-        <FootageSlot label="實機畫面 1：秘書動態牆" hint="phone-wall.mp4 · 判讀頁動態流" />
+        <WallScreen />
       </Sequence>
       <Sequence from={900} durationInFrames={600}>
         <CaptionBar text="秘書每天把發現寫成動態，每則都掛著證據" en="The secretary posts daily findings, each citing its evidence" />
       </Sequence>
       <Sequence from={1500} durationInFrames={600}>
-        <FootageSlot label="實機畫面 2：本週回顧" hint="phone-weekly.mp4 · Meta 寫給家人的話" />
+        <WeeklyScreen />
       </Sequence>
       <Sequence from={1500} durationInFrames={600}>
         <CaptionBar text="Meta 讀一週動態，寫成家人看得懂的一段話" en="Meta reads the week's feed and writes one paragraph for family" />
       </Sequence>
       <Sequence from={2100} durationInFrames={600}>
-        <FootageSlot label="實機畫面 3：提問閉環" hint="phone-ask.mp4 · 問一題 → 本人回 → 交接" />
+        <CareScreen />
       </Sequence>
       <Sequence from={2100} durationInFrames={600}>
-        <CaptionBar text="值得關心先問本人，未釐清才交給家人" en="Ask the parent first; hand to family only if unclear" />
+        <CaptionBar text="照顧者看到同一個 Ken：求助、時間線、處理都在這裡" en="The caregiver sees the same Ken: help, timeline, resolution" />
       </Sequence>
       <Sequence from={2700} durationInFrames={1200}>
         <BulletCard head="怎麼做到不亂猜" enHead="How it avoids guessing wildly" lines={['手機本地採集：前景、播放、通知、定位、電量', '本地規則先守門：證據不夠就閉嘴', 'Meta 融合多條弱訊號，寫成一句關心', '只針對事實發揮，絕不捏造時間跟數字']} />

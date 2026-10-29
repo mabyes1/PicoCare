@@ -26,7 +26,9 @@ Dated record of what was built during the event. All commits in this repo are wi
 - Field phone linked into the caregiver workspace (real data only; demo rows removed after). Gateway opened for caregiver `/api/*` with cookie forwarding.
 - UI polish (`1.0.0-meta.15`/114): shared `UiBits` pills/avatars, status badges on both apps, question expiry hint, weekly source pill, wall time+source pills, caregiver timeline section. 32+32 Android tests green.
 
-## 2026-10-30 (planned)
+## 2026-10-30
 
-- 3-minute demo video (all real device footage) + vertical cut for X.
-- README (EN) + submission.
+- Real weekly review generated for Ken via Baseten open weights (2 notes + 2 checkins, verbatim model output stored in `secretary_weekly`); morning app + caregiver detail now show the card.
+- Demo video finals rendered locally (`video/out/`, git-ignored): `picocare-demo-3min.mp4` (1920x1080, 180s) + `picocare-demo-vertical.mp4` (1080x1920, 40s).
+- Phone was in owner use overnight, so app scenes are PC reconstructions (`video/src/phone.tsx`) using verbatim real product text (DB notes, Baseten weekly, alerts, timeline kinds/times) in the app's pixel language; swap for real recordings in `video/public/phone-*.mp4` if filmed.
+- README (EN) + submission form still owner-side: upload video unlisted, push public repo, submit links.
