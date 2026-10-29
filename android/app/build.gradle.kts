@@ -1,4 +1,4 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+﻿import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
     namespace = "tw.picocare.app"
@@ -7,9 +7,15 @@ android {
         applicationId = "tw.picocare.meta"
         minSdk = 26
         targetSdk = 35
-        versionCode = 108
-        versionName = "1.0.0-meta.9"
+        versionCode = 114
+        versionName = "1.0.0-meta.15"
     }
+    flavorDimensions += "side"
+    productFlavors {
+        create("elder") { dimension = "side"; manifestPlaceholders["appLabel"] = "PicoCare 實測" }
+        create("care") { dimension = "side"; applicationId = "tw.picocare.meta.care"; manifestPlaceholders["appLabel"] = "PicoCare 照顧者" }
+    }
+    buildFeatures { buildConfig = true }
     buildTypes {
         getByName("debug") { signingConfig = null }
         getByName("release") { isMinifyEnabled = false; signingConfig = null }

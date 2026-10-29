@@ -117,6 +117,22 @@ test('快取跟隨證據與時效，資料改變或過期就使用本地判讀',
   } finally { f.store.close(); }
 });
 
+test('最近 Meta 結果保留給本人查看，過期後不套用到現況，也不為查看多呼叫 API', async () => {
+  const f = fixture(); let calls = 0;
+  try {
+    f.ingest(); f.store.secretary.model = new MetaSecretary(f.store, config(), new MetaApi(config(), async () => { calls++; return reply(); }));
+    await f.store.secretary.model.tick();
+    const at = f.store.deviceStatus(f.person.deviceToken).secretary.latestMeta!.at;
+    f.advance(121000); f.ingest();
+    const status = f.store.deviceStatus(f.person.deviceToken);
+    assert.equal(status.secretary.decision.source, 'local_evidence');
+    assert.equal(status.secretary.latestMeta!.source, 'meta'); assert.equal(status.secretary.latestMeta!.at, at);
+    assert(status.secretary.latestMeta!.validUntil < f.now()); assert.equal(calls, 1);
+    const other = f.store.selfEnroll({ displayName: '另一位', requestId: randomUUID() });
+    assert.equal(f.store.deviceStatus(other.deviceToken).secretary.latestMeta, null);
+  } finally { f.store.close(); }
+});
+
 test('呼叫間隔與每日限額計入失敗請求，重建 worker 也不洗掉計數', async () => {
   const f = fixture(); let calls = 0;
   try {

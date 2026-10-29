@@ -339,12 +339,16 @@ export class CareStore {
     const base: Context = { batteryPercent: 78, charging: true, network: 'online', screenInteractive: true,
       ringer: 'normal', motion: 'unknown', location: null, notifications: [], sharing: 'summary' };
     this.transaction(() => {
+      const ids: string[] = [];
       for (const [index, name] of ['林阿姨', '陳伯伯', '張奶奶'].entries()) {
         const personId = id(), observedAt = now - (index === 2 ? 600000 : 20000);
         const c: Context = index === 1 ? { ...base, charging: false, screenInteractive: false, motion: 'moving', notifications: [{ category: 'navigation', observedAt }] } : index === 2 ? { ...base, batteryPercent: 9, charging: false } : base;
         this.run('INSERT INTO people(id,workspace_id,name,device_token,demo,revision,context_json,context_at,last_seen,last_checkin,help_id,help_at) VALUES(?,?,?,?,1,1,?,?,?,?,?,?)',
           personId, identity.workspaceId, name, secret(), JSON.stringify(c), observedAt, observedAt, index === 0 ? now - 300000 : null, index === 2 ? id() : null, index === 2 ? now - 120000 : null);
+        ids.push(personId);
       }
+      this.run('INSERT INTO care_alerts(id,source_key,person_id,kind,created_at,payload) VALUES(?,?,?,?,?,?)', id(), `demo-help:${ids[2]}`, ids[2], 'help', now - 120000,
+        JSON.stringify({ title: '示範：張奶奶按了需要協助', evidence: ['示範資料：電量 9%，未充電'], question: null, answer: null }));
     });
     return { created: true };
   }

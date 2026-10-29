@@ -3,6 +3,7 @@ package tw.picocare.app
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -17,6 +18,16 @@ import android.widget.TextView
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class SelfInsightTest {
+    @Test fun latestMetaStaysVisibleWhenCurrentDecisionUsesLocalRules() {
+        val latest = JSONObject().put("source", "meta").put("model", "muse-spark-1.3").put("title", "看起來正在看 YouTube")
+            .put("reason", "影片已播放兩分鐘。").put("at", 1000).put("validUntil", 2000)
+        val current = JSONObject().put("source", "local_evidence").put("title", "手機螢幕開啟")
+        val server = JSONObject().put("secretary", JSONObject().put("latestMeta", latest).put("decision", current))
+        val text = SelfInsight.metaPreview(server, 3000)
+        assertTrue(text.contains("看起來正在看 YouTube")); assertTrue(text.contains("影片已播放兩分鐘。"))
+        assertTrue(text.contains("上次結果")); assertTrue(text.contains("muse-spark-1.3")); assertFalse(text.contains("手機螢幕開啟"))
+        assertEquals("還沒有 Meta 判斷。", SelfInsight.metaPreview(JSONObject(), 3000))
+    }
     @Test fun conciseDecisionDoesNotAddEmptySectionsOrConfirmationBoilerplate() {
         val decision = JSONObject().put("source", "meta").put("model", "muse-spark-1.3").put("title", "手機螢幕已關閉")
             .put("reason", "").put("at", 1000).put("validUntil", 5000).put("alternatives", JSONArray()).put("gaps", JSONArray())
@@ -34,13 +45,14 @@ class SelfInsightTest {
         assertTrue(text.contains("判讀來源：本地證據規則")); assertTrue(text.contains("API 暫不可用"))
     }
     @Test fun firstScreenOffersOwnSecretaryAndVisibleEvidence() {
+        assumeTrue(BuildConfig.FLAVOR == "elder")
         RuntimeEnvironment.getApplication().getSharedPreferences("picocare_meta_v1", 0).edit().clear().commit()
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             val texts = mutableListOf<TextView>()
             fun visit(v: View) { if (v is TextView) texts.add(v); if (v is ViewGroup) for (i in 0 until v.childCount) visit(v.getChildAt(i)) }
             visit(controller.get().window.decorView)
-            for (expected in listOf("我的照護秘書", "它剛剛看到了什麼", "PicoCare 怎麼猜、為什麼")) assertTrue(texts.any { it.text.toString() == expected })
+            for (expected in listOf("我的照護秘書", "PicoCare 的關懷思考", "本週回顧", "秘書動態", "詳細資訊（DEBUG）", "首頁", "判讀", "設定")) assertTrue(texts.any { it.text.toString() == expected })
             texts.first { it.text.toString() == "開始使用我的秘書" }.performClick()
             assertTrue(ShadowAlertDialog.getLatestAlertDialog().isShowing)
         } finally { controller.pause().stop().destroy() }
@@ -54,6 +66,33 @@ class SelfInsightTest {
         val text = SelfInsight.observations(sample, 1000)
         assertTrue(text.contains("87%")); assertTrue(text.contains("前景 App 來源：未授權")); assertTrue(text.contains("媒體播放 來源：未啟用"))
         assertTrue(SelfInsight.interpretation(JSONObject(), 2000).contains("還沒收到秘書判讀"))
+    }
+    @Test fun userThinkingShowsTitleReasonAndFreshnessWithoutPlumbing() {
+        val decision = JSONObject().put("source", "meta").put("model", "muse-spark-1.3").put("title", "可能正在看影片")
+            .put("reason", "前景與播放一致").put("at", 1000).put("validUntil", 5000)
+        val thinking = SelfInsight.thinking(JSONObject().put("secretary", JSONObject().put("decision", decision)), 2000)
+        assertEquals("可能正在看影片", thinking.title); assertEquals("前景與播放一致", thinking.reason); assertEquals(1000, thinking.observedAt)
+        val stale = SelfInsight.thinking(JSONObject().put("secretary", JSONObject().put("decision", decision)), 6000)
+        assertEquals("可能正在看影片（需要更新）", stale.title)
+        val empty = SelfInsight.thinking(JSONObject(), 2000)
+        assertEquals("還沒有想法", empty.title); assertEquals(0, empty.observedAt)
+    }
+    @Test fun notesFeedParsesNotesAndSurvivesMissingField() {
+        val note = JSONObject().put("id", "n1").put("at", 2000).put("kind", "morning").put("title", "今天第一次看到你用手機")
+            .put("body", "今天 08:00 第一次看到手機亮起來。").put("source", "local_evidence")
+            .put("evidence", JSONArray().put(JSONObject().put("label", "今天第一次手機可互動").put("observedAt", 2000)))
+        val items = SelfInsight.notes(JSONObject().put("secretary", JSONObject().put("notes", JSONArray().put(note))))
+        assertEquals(1, items.size); assertEquals("今天第一次看到你用手機", items[0].title)
+        assertEquals(listOf("• 今天第一次手機可互動"), items[0].evidence); assertEquals("local_evidence", items[0].source)
+        assertTrue(SelfInsight.notes(JSONObject()).isEmpty())
+        assertTrue(SelfInsight.notes(JSONObject().put("secretary", JSONObject())).isEmpty())
+    }
+    @Test fun weeklyReviewParsesTextAndSurvivesMissingField() {
+        val w = JSONObject().put("text", "媽媽這週都有出門走走。").put("at", 2000).put("model", "muse-spark-1.3")
+        val weekly = SelfInsight.weekly(JSONObject().put("secretary", JSONObject().put("weekly", w)))!!
+        assertEquals("媽媽這週都有出門走走。", weekly.text); assertEquals(2000, weekly.at)
+        assertNull(SelfInsight.weekly(JSONObject()))
+        assertNull(SelfInsight.weekly(JSONObject().put("secretary", JSONObject().put("weekly", JSONObject().put("text", "")))))
     }
     @Test fun staleGuessKeepsEvidenceAlternativesAndOriginalAnswerSeparate() {
         val decision = JSONObject().put("title", "可能正在看影片").put("reason", "前景與播放一致").put("at", 1000).put("validUntil", 2000)

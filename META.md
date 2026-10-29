@@ -64,4 +64,12 @@ Meta confirm 的問題不再用重訪／低電量的舊模板，而是從 Meta �
 
 ELSE 整理走同一條 Meta 節流：每日 60 次、全服務同時一個請求、失敗不丟求助。整理在回答交易提交後才跑，原話永遠保留，只加 review 與 metaElseSummary；clarified 時收回已升級的關心與提醒，needs_contact 時立求助旗標，pending 時什麼都不動。
 
-真 key 臨時 DB 驗證（2026-10-28，live DB 未動）：合成外出（直線移動、9 次導航、電量 80%，本地不確認）Meta 判 outing/confirm，理由引用聚合「移動總距離約 1779 公尺，期間有 9 次導航通知」，問題為通用問句；ELSE「我在附近散步，沒事」判 clarified，原話保留，關心與提醒被收回。測試：npm run check、build、test 72/72（含 wild 10 題）。meta.9 起排程改為浮動問候＋提問冷卻，固定關心時間已移除；另修復舊版關心表儲存相容。
+真 key 臨時 DB 驗證（2026-10-28，live DB 未動）：合成外出（直線移動、9 次導航、電量 80%，本地不確認）Meta 判 outing/confirm，理由引用聚合「移動總距離約 1779 公尺，期間有 9 次導航通知」，問題為通用問句；ELSE「我在附近散步，沒事」判 clarified，原話保留，關心與提醒被收回。測試：npm run check、build、test 73/73（含 wild 10 題）。meta.9 起排程改為浮動問候＋提問冷卻，固定關心時間已移除；另修復舊版關心表儲存相容。meta.10 起保留最近 Meta 結果供本人查看。
+
+## 2026-10-29 開源權重週回顧（Baseten）
+
+本週回顧改走開源模型：有 `BASENTEN_API_KEY` 時，`MetaSecretary.weeklyTick` 用 Baseten Model API（`https://inference.baseten.co/v1`）打 `BASENTEN_MODEL`（實測 `meta-models/muse-spark-open-1026`），不受 Meta 主額度耗盡影響；沒 key 才退回 Meta 主模型。情境判讀與 ELSE 整理仍走 Meta 主 API（需要結構化輸出）。
+
+Spark Open 不支援 structured-output 參數，所以開源路徑不送 `response_format` 與 `reasoning_effort`，提示詞內給 JSON 格式範例，回來做 brace 擷取＋欄位別名（`text`／`reviewText`／`summary`／`content`）。醫療字眼、400 字上限、座標與通知原文不送出的規則兩條路共用。
+
+真 key 驗證（2026-10-29，合成一週）：開源模型回傳欄位名用錯一次（`reviewText`），內容正確，修完雙保險後端到端通過。手機本週回顧卡會標示「開源模型整理」或「Meta 整理」。

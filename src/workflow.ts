@@ -160,7 +160,8 @@ export class CareWorkflow {
           const d = this.s.secretary.decision(p.id), video = plan.contextualEnabled && d.scenario === 'video' && d.action === 'wait' && d.validUntil > this.s.now();
           if (run.state === 'waiting' && video) {
             this.s.run("UPDATE care_runs SET state='observing',deadline=?,reason=? WHERE id=?", this.s.now() + 15 * minute, '可能正在看影片；先延後確認，尚未收到本人報安', run.id);
-            this.step(run, 'video_wait', '前景影音 App 與播放線索持續一致，最多延後十五分鐘；不發出異常提醒'); continue;
+            this.step(run, 'video_wait', '前景影音 App 與播放線索持續一致，最多延後十五分鐘；不發出異常提醒');
+            this.s.secretary.notes.videoWait(p.id, d); continue;
           }
           if (run.state === 'observing' && this.s.now() < run.deadline) {
             const latest = this.s.secretary.samples(p.id).at(-1);
@@ -168,6 +169,7 @@ export class CareWorkflow {
             if (video || !sourcesKnown) continue;
           }
           const q = this.s.ask(p.id, run.state === 'observing' ? videoQuestion() : missedCheckinQuestion(), plan.responseMinutes * minute);
+          if (run.state === 'observing') this.s.secretary.notes.askedVideo(p.id, d);
           this.s.run("UPDATE care_runs SET state='question_pending',question_id=?,deadline=?,reason=? WHERE id=?", q.id, q.expiresAt, '已提出一題，等待手機領取與本人回覆', run.id);
           this.s.run('INSERT INTO reminders(id,person_id,created_at,expires,question_id) SELECT ?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM reminders WHERE question_id=?)', randomUUID(), p.id, this.s.now(), q.expiresAt, q.id, q.id);
           this.step(run, 'question_queued', run.state === 'observing' ? '影音線索改變或延後期限到達，現在詢問本人確認' : '到關心時間仍未報安，已排入一題與手機提醒');

@@ -3,7 +3,7 @@ export type ContextSample = { id: string; at: number; context: PhoneContext };
 export interface SituationInterpreter { evaluate(samples: ContextSample[], now: number): ContextDecision }
 const minute = 60000;
 const fresh = (at: number, now: number) => at <= now && now - at <= 2 * minute;
-const hasVideo = (s: ContextSample, now: number) => {
+export const hasVideo = (s: ContextSample, now: number) => {
   const c = s.context;
   return fresh(s.at, now) && c.sources?.usage === 'available' && c.sources.media === 'available' && c.screenInteractive === true &&
     c.usage?.category === 'video' && c.media?.state === 'playing' && c.usage.appId === c.media.appId &&

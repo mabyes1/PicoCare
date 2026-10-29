@@ -25,6 +25,7 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
@@ -35,13 +36,37 @@ import java.util.Calendar
 
 class MainActivity : Activity() {
     private val green = Color.rgb(32, 92, 74)
+    private val ink = Color.rgb(49, 68, 57)
+    private val muted = Color.rgb(119, 136, 111)
+    private val faint = Color.rgb(133, 147, 124)
+    private val rust = Color.rgb(166, 77, 45)
+    private val paper = Color.rgb(245, 247, 240)
+    private val warm = Color.rgb(255, 250, 235)
+    private val sage = Color.rgb(232, 238, 222)
+    private val amber = Color.rgb(176, 124, 32)
+    private val pillAmber = Color.rgb(247, 238, 220)
+    private val pillBlush = Color.rgb(247, 231, 224)
+    private val pillMist = Color.rgb(235, 238, 230)
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var status: TextView
+    private lateinit var statusLines: LinearLayout
+    private lateinit var statusDebugLines: LinearLayout
+    private lateinit var thinkingTitle: TextView
+    private lateinit var thinkingReason: TextView
+    private lateinit var thinkingTime: TextView
+    private lateinit var weeklyText: TextView
+    private lateinit var weeklyTime: TextView
+    private lateinit var weeklyPills: LinearLayout
+    private lateinit var wallBox: LinearLayout
+    private lateinit var debugInsightCard: LinearLayout
+    private lateinit var syncButton: Button
+    private lateinit var endpointButton: Button
+    private lateinit var debugSwitch: Switch
     private lateinit var connectionButton: Button
     private lateinit var header: TextView
     private lateinit var questionPanel: LinearLayout
     private lateinit var observationText: TextView
     private lateinit var interpretationText: TextView
+    private lateinit var metaPreviewText: TextView
     private lateinit var startButton: Button
     private lateinit var permissionText: TextView
     private lateinit var usagePermissionButton: Button
@@ -49,6 +74,9 @@ class MainActivity : Activity() {
     private lateinit var locationPermissionButton: Button
     private lateinit var notificationPermissionButton: Button
     private var questionSignature = ""
+    private lateinit var tabPages: List<View>
+    private lateinit var tabButtons: List<Button>
+    private var selectedTab = 0
     private val ticker = object : Runnable { override fun run() { refresh(); handler.postDelayed(this, 5000) } }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun background(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(18).toFloat() }
@@ -59,46 +87,143 @@ class MainActivity : Activity() {
     private fun button(value: String, primary: Boolean = false, work: () -> Unit) = Button(this).apply {
         text = value; textSize = 18f; isAllCaps = false
         setTextColor(if (primary) Color.WHITE else green)
-        background = background(if (primary) green else Color.rgb(232, 238, 222))
+        background = background(if (primary) green else sage)
         minimumHeight = dp(64); setPadding(dp(14), dp(14), dp(14), dp(14))
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(13) }
         setOnClickListener { work() }
     }
+    private fun card() = column().apply { background = background(Color.WHITE); setPadding(dp(18), dp(14), dp(18), dp(14)) }
+    private fun cardParams(top: Int = 16) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) }
+    private fun sectionTitle(value: String) = label(value, 19f).apply { setTypeface(null, Typeface.BOLD); setPadding(0, dp(4), 0, dp(8)) }
+    private fun compactButton(value: String, work: () -> Unit) = Button(this).apply {
+        text = value; textSize = 16f; isAllCaps = false
+        setTextColor(green)
+        background = background(sage)
+        minimumHeight = dp(52); setPadding(dp(14), dp(10), dp(14), dp(10))
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
+        setOnClickListener { work() }
+    }
+    private fun buttonRow(first: Button, second: Button) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(13) }
+        for ((child, left, right) in listOf(Triple(first, 0, 6), Triple(second, 6, 0))) {
+            child.layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(left); rightMargin = dp(right) }
+            addView(child)
+        }
+    }
+    private fun tabButton(value: String, index: Int) = Button(this).apply {
+        text = value; textSize = 17f; isAllCaps = false
+        minimumHeight = dp(56)
+        layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) }
+        setOnClickListener { showTab(index) }
+    }
+    private fun showTab(index: Int) {
+        selectedTab = index
+        for ((i, page) in tabPages.withIndex()) page.visibility = if (i == index) View.VISIBLE else View.GONE
+        for ((i, button) in tabButtons.withIndex()) {
+            val selected = i == index
+            button.setTextColor(if (selected) green else muted)
+            button.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
+            button.background = background(if (selected) sage else Color.WHITE)
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val content = column().apply { setBackgroundColor(Color.rgb(245, 247, 240)) }
-        content.addView(label("PicoCare", 25f, green).apply { setTypeface(null, Typeface.BOLD) })
-        header = label("我的照護秘書", 29f).apply { setTypeface(null, Typeface.BOLD) }; content.addView(header)
-        content.addView(label("看它蒐集了什麼、怎麼理解你，再由你確認。", 15f, Color.rgb(119, 136, 111)))
-        startButton = button("開始使用我的秘書", true) { beginSelf() }; content.addView(startButton)
-        questionPanel = column().apply { background = background(Color.WHITE); visibility = View.GONE }
-        content.addView(questionPanel, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) })
-        val permissionPanel = column().apply { background = background(Color.WHITE) }
-        permissionPanel.addView(label("手機資料與權限", 20f).apply { setTypeface(null, Typeface.BOLD) })
+        if (BuildConfig.FLAVOR == "care") { startActivity(Intent(this, CareActivity::class.java)); finish(); return }
+        val home = column().apply { setBackgroundColor(paper) }
+        home.addView(label("PicoCare", 15f, green).apply { setTypeface(null, Typeface.BOLD) })
+        header = label("我的照護秘書", 28f).apply { setTypeface(null, Typeface.BOLD) }; home.addView(header)
+        home.addView(label("報安、回答問題、看近況都在這裡。", 14f, muted))
+        startButton = button("開始使用我的秘書", true) { beginSelf() }; home.addView(startButton)
+        questionPanel = column().apply { background = background(warm); setPadding(dp(18), dp(14), dp(18), dp(14)); visibility = View.GONE }
+        home.addView(questionPanel, cardParams())
+        home.addView(buttonRow(
+            button("我很好", true) { send("checkin") },
+            button("我需要協助") { AlertDialog.Builder(this).setTitle("記錄需要協助？").setMessage(if (CareConfig(this).selfMode) "本人實測尚未配對照顧者，會記錄這次需求；目前沒有照顧者可接收。" else "會通知你已配對的照顧空間，請人員聯絡你。").setNegativeButton("取消", null).setPositiveButton("記錄需求") { _, _ -> send("help") }.show() }
+        ))
+        val statusCard = card(); statusCard.addView(sectionTitle("近況"))
+        statusLines = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        statusDebugLines = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        statusCard.addView(statusLines); statusCard.addView(statusDebugLines); home.addView(statusCard, cardParams())
+        connectionButton = button("開始連線") { toggleConnection() }
+        syncButton = button("立即同步") { runWork { CareRuntime.sync(this) } }
+        home.addView(buttonRow(connectionButton, syncButton))
+        val insight = column().apply { setBackgroundColor(paper) }
+        insight.addView(label("秘書的想法", 28f).apply { setTypeface(null, Typeface.BOLD) })
+        insight.addView(label("秘書看到了什麼、怎麼理解你。", 14f, muted))
+        val thinkingCard = card(); thinkingCard.addView(sectionTitle("PicoCare 的關懷思考"))
+        thinkingTitle = label("", 17f).apply { setTypeface(null, Typeface.BOLD) }; thinkingCard.addView(thinkingTitle)
+        thinkingReason = label("", 15f); thinkingCard.addView(thinkingReason)
+        thinkingTime = label("", 13f, muted); thinkingCard.addView(thinkingTime)
+        insight.addView(thinkingCard, cardParams())
+        val weeklyCard = card(); weeklyCard.addView(sectionTitle("本週回顧"))
+        weeklyText = label("", 15f); weeklyCard.addView(weeklyText)
+        weeklyPills = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; weeklyCard.addView(weeklyPills)
+        weeklyTime = label("", 13f, muted); weeklyCard.addView(weeklyTime)
+        insight.addView(weeklyCard, cardParams())
+        insight.addView(sectionTitle("秘書動態"))
+        wallBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        insight.addView(wallBox)
+        debugInsightCard = card(); debugInsightCard.addView(sectionTitle("詳細資訊（DEBUG）"))
+        debugInsightCard.addView(label("詳細判讀", 15f, muted).apply { setTypeface(null, Typeface.BOLD) })
+        interpretationText = label("", 14f); debugInsightCard.addView(interpretationText)
+        debugInsightCard.addView(label("觀測原文", 15f, muted).apply { setTypeface(null, Typeface.BOLD) })
+        observationText = label("", 14f); debugInsightCard.addView(observationText)
+        // Field-test view: retain the latest model result when live context changes.
+        debugInsightCard.addView(label("Meta 原始", 15f, muted).apply { setTypeface(null, Typeface.BOLD) })
+        metaPreviewText = label("還沒有 Meta 判斷。", 14f); debugInsightCard.addView(metaPreviewText)
+        insight.addView(debugInsightCard, cardParams())
+        val settings = column().apply { setBackgroundColor(paper) }
+        settings.addView(label("設定", 28f).apply { setTypeface(null, Typeface.BOLD) })
+        settings.addView(label("權限、連線跟工具都在這裡。", 14f, muted))
+        val permissionPanel = card()
+        permissionPanel.addView(sectionTitle("手機資料與權限"))
         permissionText = label("", 15f); permissionPanel.addView(permissionText)
-        usagePermissionButton = button("開啟前景 App 使用權限", true) { openUsageAccess() }; permissionPanel.addView(usagePermissionButton)
-        listenerPermissionButton = button("開啟通知與媒體存取") { openNotificationAccess() }; permissionPanel.addView(listenerPermissionButton)
+        usagePermissionButton = button("開啟 App 使用權限", true) { openUsageAccess() }; permissionPanel.addView(usagePermissionButton)
+        listenerPermissionButton = button("開啟通知存取") { openNotificationAccess() }; permissionPanel.addView(listenerPermissionButton)
         locationPermissionButton = button("設定定位權限") { openAppDetails() }; permissionPanel.addView(locationPermissionButton)
-        notificationPermissionButton = button("允許 PicoCare 顯示提醒") { openSettings(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName), Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }; permissionPanel.addView(notificationPermissionButton)
-        permissionPanel.addView(button("選擇手機資料來源") { sources() })
-        content.addView(permissionPanel, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) })
-        content.addView(label("它剛剛看到了什麼", 20f).apply { setTypeface(null, Typeface.BOLD) })
-        observationText = label("", 15f); content.addView(observationText)
-        content.addView(label("PicoCare 怎麼猜、為什麼", 20f).apply { setTypeface(null, Typeface.BOLD) })
-        interpretationText = label("", 15f).apply { background = background(Color.WHITE); setPadding(dp(16), dp(16), dp(16), dp(16)) }; content.addView(interpretationText)
-        content.addView(button("我今天平安，送出報安", true) { send("checkin") })
-        content.addView(button("我需要協助") { AlertDialog.Builder(this).setTitle("記錄需要協助？").setMessage(if (CareConfig(this).selfMode) "本人實測尚未配對照顧者，會記錄這次需求；目前沒有照顧者可接收。" else "會通知你已配對的照顧空間，請人員聯絡你。").setNegativeButton("取消", null).setPositiveButton("記錄需求") { _, _ -> send("help") }.show() })
-        status = label("", 15f).apply { background = background(Color.WHITE); setPadding(dp(18), dp(18), dp(18), dp(18)) }
-        content.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(24) })
-        connectionButton = button("開始持續關懷連線") { toggleConnection() }; content.addView(connectionButton)
-        content.addView(button("立即同步") { runWork { CareRuntime.sync(this) } })
-        content.addView(button("服務連線設定") { serviceEndpoint() })
-        content.addView(button("手機配對") { pairing() })
-        content.addView(button("資料來源與分享設定") { sources() })
-        content.addView(button("本機證據時間線") { timeline() })
-        content.addView(button("開啟每日關心") { ownPlan() })
-        content.addView(label("情境猜測的來源與 Meta 連線狀態會顯示在判讀內容中。", 12f, Color.rgb(133, 147, 124)))
-        setContentView(ScrollView(this).apply { addView(content) })
+        notificationPermissionButton = button("允許顯示提醒") { openSettings(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName), Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }; permissionPanel.addView(notificationPermissionButton)
+        permissionPanel.addView(button("選擇資料來源") { sources() })
+        settings.addView(permissionPanel, cardParams())
+        val settingsCard = card(); settingsCard.addView(sectionTitle("設定與工具"))
+        endpointButton = compactButton("服務連線設定") { serviceEndpoint() }
+        settingsCard.addView(endpointButton)
+        settingsCard.addView(compactButton("手機配對") { pairing() })
+        settingsCard.addView(compactButton("資料來源與分享") { sources() })
+        settingsCard.addView(compactButton("本機證據時間線") { timeline() })
+        settingsCard.addView(compactButton("開啟每日關心") { ownPlan() })
+        settings.addView(settingsCard, cardParams())
+        val debugCard = card(); debugCard.addView(sectionTitle("開發者選項"))
+        debugSwitch = Switch(this).apply {
+            text = "DEBUG MODE"; textSize = 16f; setTextColor(ink); setPadding(0, dp(4), 0, dp(4))
+            setOnCheckedChangeListener { _, checked -> CareConfig(this@MainActivity).debugMode = checked; refresh() }
+        }
+        debugCard.addView(debugSwitch)
+        debugCard.addView(label("開啟後顯示詳細同步與判讀資訊。", 13f, muted))
+        settings.addView(debugCard, cardParams())
+        settings.addView(label("情境猜測的來源與 Meta 連線狀態會顯示在判讀內容中。", 12f, faint))
+        settings.addView(label("PicoCare 實測 ${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE}", 12f, faint))
+        val pages = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+        }
+        tabPages = listOf(home, insight, settings).map { page ->
+            ScrollView(this).apply { addView(page); pages.addView(this, LinearLayout.LayoutParams(-1, -1)) }
+        }
+        tabButtons = listOf("首頁" to 0, "判讀" to 1, "設定" to 2).map { (name, index) -> tabButton(name, index) }
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; setBackgroundColor(Color.WHITE)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            for (button in tabButtons) addView(button)
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setBackgroundColor(paper)
+            addView(pages)
+            addView(View(this@MainActivity).apply { setBackgroundColor(Color.rgb(226, 232, 216)); layoutParams = LinearLayout.LayoutParams(-1, dp(1)) })
+            addView(bar)
+        }
+        setContentView(root)
+        showTab(0)
         // PhoneWindow needs its decor view before exposing the insets controller.
         if (Build.VERSION.SDK_INT >= 30) window.decorView.windowInsetsController?.setSystemBarsAppearance(WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS)
         else legacyStatusBar()
@@ -120,20 +245,78 @@ class MainActivity : Activity() {
     override fun onPause() { handler.removeCallbacks(ticker); super.onPause() }
     private fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
     private fun refresh() {
-        val config = CareConfig(this); val outbox = CareRuntime.outbox(this)
+        val config = CareConfig(this)
         val last = config.prefs.getLong("sync_at", 0)
         val server = runCatching { JSONObject(config.prefs.getString("server_status", "{}")!!) }.getOrDefault(JSONObject())
-        val report = if (server.optString("checkin") == "reported") "最近中心狀態：已收到本人報安" else "最近中心狀態：等候報安"
-        val hasCaregiver = server.optBoolean("caregiverConnected", !config.selfMode)
-        val help = if (server.optBoolean("helpOpen")) if (hasCaregiver) "\n已送出求助，等候照顧者處理" else "\n已記錄希望被聯絡；尚未配對照顧者" else ""
         startButton.visibility = if (config.ready) View.GONE else View.VISIBLE
-        status.text = if (!config.ready) "先開始使用自己的秘書；也可以輸入照顧者的配對碼。" else "${config.personName}\n${if (!hasCaregiver) "本人實測；尚未配對照顧者\n" else ""}$report$help\n最近同步：${if (last == 0L) "尚未同步" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(last))}\n待送出 ${outbox.count()} 筆${if (outbox.count("failed") > 0) " · 需檢查 ${outbox.count("failed")} 筆" else ""}\n${config.prefs.getString("connection_message", "") ?: ""}"
-        connectionButton.text = if (CareConnectionService.running) "停止持續關懷連線" else "開始持續關懷連線"
+        val debug = config.debugMode
+        syncButton.visibility = if (debug) View.VISIBLE else View.GONE
+        endpointButton.visibility = if (debug) View.VISIBLE else View.GONE
+        debugInsightCard.visibility = if (debug) View.VISIBLE else View.GONE
+        statusDebugLines.visibility = if (debug) View.VISIBLE else View.GONE
+        if (debugSwitch.isChecked != debug) debugSwitch.isChecked = debug
+        renderStatus(config, server, last)
+        connectionButton.text = if (CareConnectionService.running) "停止連線" else "開始連線"
         refreshPermissions(config)
         renderQuestion(server.optJSONObject("question"))
         observationText.text = SelfInsight.observations(runCatching { JSONObject(config.prefs.getString("last_local_context", "")!!) }.getOrNull(), config.prefs.getLong("last_local_at", 0))
         val estimatedNow = if (last > 0) server.optLong("serverAt", System.currentTimeMillis()) + (System.currentTimeMillis() - last).coerceAtLeast(0) else System.currentTimeMillis()
+        metaPreviewText.text = SelfInsight.metaPreview(server, estimatedNow)
         interpretationText.text = SelfInsight.interpretation(server, estimatedNow)
+        val thinking = SelfInsight.thinking(server, estimatedNow)
+        thinkingTitle.text = thinking.title
+        thinkingReason.text = thinking.reason
+        thinkingTime.text = if (thinking.observedAt > 0) "${relativeTime(thinking.observedAt)}的想法" else ""
+        val weekly = SelfInsight.weekly(server)
+        weeklyText.text = weekly?.text ?: "動態再多一點，Meta 會幫你寫一段給家人的本週回顧。"
+        weeklyPills.removeAllViews()
+        if (weekly != null) weeklyPills.addView(UiBits.pill(this, if (weekly.model.contains("open")) "開源模型整理" else "Meta 整理", green, sage))
+        weeklyTime.text = if (weekly == null || weekly.at <= 0) "" else relativeTime(weekly.at)
+        renderWall(server)
+    }
+    private fun renderWall(server: JSONObject) {
+        wallBox.removeAllViews()
+        val items = SelfInsight.notes(server)
+        if (items.isEmpty()) { wallBox.addView(label("還沒有動態。秘書有發現會寫在這裡。", 14f, muted)); return }
+        for (n in items) {
+            val post = card()
+            post.addView(label(n.title, 16f).apply { setTypeface(null, Typeface.BOLD) })
+            if (n.body.isNotBlank()) post.addView(label(n.body, 14f))
+            for (e in n.evidence) post.addView(label(e, 13f, muted))
+            val meta = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            meta.addView(UiBits.pill(this, relativeTime(n.at), muted, pillMist))
+            meta.addView(UiBits.pill(this, if (n.source == "meta") "Meta 融合" else "本地整理", green, sage))
+            post.addView(meta)
+            wallBox.addView(post, cardParams(10))
+        }
+    }
+    private fun renderStatus(config: CareConfig, server: JSONObject, last: Long) {
+        statusLines.removeAllViews()
+        if (!config.ready) { statusLines.addView(label("先開始使用自己的秘書；也可以輸入照顧者的配對碼。", 15f)); return }
+        val reported = server.optString("checkin") == "reported"
+        val hasCaregiver = server.optBoolean("caregiverConnected", !config.selfMode)
+        statusLines.addView(label(if (reported) "已收到本人報安" else "等候報安", 21f, if (reported) green else ink).apply { setTypeface(null, Typeface.BOLD) })
+        val pills = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        pills.addView(UiBits.pill(this, if (reported) "已報安" else "等候報安", if (reported) green else amber, if (reported) sage else pillAmber))
+        if (server.optBoolean("helpOpen")) pills.addView(UiBits.pill(this, "已求助", rust, pillBlush))
+        statusLines.addView(pills)
+        if (server.optBoolean("helpOpen")) statusLines.addView(label(if (hasCaregiver) "已送出求助，等候照顧者處理" else "已記錄希望被聯絡；尚未配對照顧者", 16f, rust))
+        val outbox = CareRuntime.outbox(this)
+        statusLines.addView(label("${config.personName}${if (!hasCaregiver) " · 本人實測；尚未配對照顧者" else ""}", 14f, muted))
+        statusDebugLines.removeAllViews()
+        val sync = "最近同步：${if (last == 0L) "尚未同步" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(last))}"
+        val pending = "待送出 ${outbox.count()} 筆${if (outbox.count("failed") > 0) " · 需檢查 ${outbox.count("failed")} 筆" else ""}"
+        statusDebugLines.addView(label("$sync · $pending", 14f, muted))
+        config.prefs.getString("connection_message", "")?.takeIf { it.isNotBlank() }?.let { statusDebugLines.addView(label(it, 14f, muted)) }
+    }
+    private fun relativeTime(at: Long): String {
+        val minutes = ((System.currentTimeMillis() - at) / 60000).toInt()
+        return when {
+            minutes < 1 -> "剛剛"
+            minutes < 60 -> "$minutes 分鐘前"
+            minutes < 60 * 24 -> "${minutes / 60} 小時前"
+            else -> DateFormat.getDateInstance(DateFormat.SHORT).format(Date(at))
+        }
     }
     private fun beginSelf() {
         val config = CareConfig(this); val form = column()
@@ -169,8 +352,9 @@ class MainActivity : Activity() {
         questionSignature = signature; questionPanel.removeAllViews(); questionPanel.visibility = if (valid) View.VISIBLE else View.GONE
         if (!valid) return
         val q = question!!
-        questionPanel.addView(label("PicoCare 想關心你一下", 13f, green))
+        questionPanel.addView(label("PicoCare 想關心你一下", 14f, green))
         questionPanel.addView(label(q.getString("prompt"), 23f).apply { setTypeface(null, Typeface.BOLD) })
+        questionPanel.addView(label("這一題 ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(q.getLong("expiresAt")))} 前有效", 13f, muted))
         if (replyState != null) {
             questionPanel.addView(label(when (replyState) { "received" -> "這一題的回答已送達"; "failed" -> "回答已保留，需要同步確認。你仍可直接按下求助。"; else -> "回答已儲存，等待送出" }, 16f))
             return
@@ -307,8 +491,8 @@ class MainActivity : Activity() {
             config.prefs.edit().putBoolean("notifications", notifications.isChecked).putBoolean("usage", usage.isChecked).putBoolean("media", media.isChecked).putBoolean("location", location.isChecked).putBoolean("detailed", detailed.isChecked).apply()
         }
         lateinit var dialog: AlertDialog
-        form.addView(button("儲存並開啟前景 App 權限") { saveSelection(); dialog.dismiss(); openUsageAccess() })
-        form.addView(button("儲存並開啟通知與媒體存取") { saveSelection(); dialog.dismiss(); openNotificationAccess() })
+        form.addView(button("儲存並開使用權限") { saveSelection(); dialog.dismiss(); openUsageAccess() })
+        form.addView(button("儲存並開通知權限") { saveSelection(); dialog.dismiss(); openNotificationAccess() })
         dialog = AlertDialog.Builder(this).setTitle("資料來源與分享").setView(ScrollView(this).apply { addView(form) }).setNegativeButton("取消", null).setPositiveButton("儲存") { _, _ ->
             saveSelection()
             val needsUsage = usage.isChecked && !ActivityEvidenceReader.usageGranted(this)

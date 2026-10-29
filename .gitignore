@@ -23,3 +23,9 @@ android/local.properties
 .env.*
 !.env.example
 .idea/
+
+video/out/
+video/public/*.mp4
+video/public/*.MP4
+
+*.mp4

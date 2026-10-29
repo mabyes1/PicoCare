@@ -49,8 +49,11 @@ export type ContextDecision = {
 export type ElseReview = { review: 'clarified' | 'needs_contact' | 'pending'; summary: string };
 export type SecretaryCase = { id: string; state: 'question_pending' | 'deferred' | 'clarified' | 'escalated' | 'resolved' | 'cancelled';
   createdAt: number; deadline: number | null; questionId: string; reason: string; decision: ContextDecision };
-export type SecretaryView = { decision: ContextDecision; outing: SecretaryCase | null;
-  confirmation: { topic: string; text: string; observedAt: number } | null };
+export type SecretaryNote = { id: string; at: number; kind: string; title: string; body: string;
+  evidence: { eventId: string; label: string; observedAt: number }[]; source: 'local_evidence' | 'meta' };
+export type SecretaryView = { decision: ContextDecision; latestMeta: ContextDecision | null; outing: SecretaryCase | null;
+  confirmation: { topic: string; text: string; observedAt: number } | null; notes: SecretaryNote[];
+  weekly: { text: string; at: number; model: string } | null };
 export type MetaIntegration = { enabled: boolean; status: string; model: string | null; requestsToday?: number; dailyLimit?: number; lastSuccessAt?: number | null; lastError?: string | null };
 export type PeopleResponse = { workspace: Workspace; serverAt: number; people: PersonView[]; alerts: CareAlert[]; meta: MetaIntegration };
 export type PersonDetail = {

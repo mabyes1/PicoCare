@@ -1,13 +1,14 @@
 import type { CareStore } from './store.ts';
 import type { ContextDecision, MetaIntegration } from '../shared/protocol.ts';
 import { dayAt } from './domain.ts';
-import { MetaApi, MetaApiError, metaInput } from './meta-api.ts';
+import { MetaApi, MetaApiError, basetenBaseUrl, metaInput } from './meta-api.ts';
 import type { MetaConfig } from './meta-api.ts';
 
 export class MetaSecretary {
   #store: CareStore;
   #config: MetaConfig;
   #api: MetaApi;
+  #openApi: MetaApi | null;
   #busy = false;
   #stopped = false;
   #blocked = false;
@@ -15,11 +16,12 @@ export class MetaSecretary {
   #requestId: number | null = null;
   #lastError: string | null = null;
   #lastSuccessAt: number | null = null;
-  constructor(store: CareStore, config: MetaConfig, api = new MetaApi(config)) {
-    this.#store = store; this.#config = config; this.#api = api;
+  constructor(store: CareStore, config: MetaConfig, api = new MetaApi(config), openApi: MetaApi | null = config.openKey ? new MetaApi(config, fetch, { baseUrl: basetenBaseUrl, key: config.openKey, model: config.openModel, structured: false }) : null) {
+    this.#store = store; this.#config = config; this.#api = api; this.#openApi = openApi;
     store.db.exec(`CREATE TABLE IF NOT EXISTS meta_decisions(person_id TEXT PRIMARY KEY REFERENCES people(id),signature TEXT NOT NULL,decision_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS meta_requests(id INTEGER PRIMARY KEY AUTOINCREMENT,person_id TEXT NOT NULL REFERENCES people(id),at INTEGER NOT NULL,model TEXT NOT NULL,status TEXT NOT NULL,error_code TEXT,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0);
-      CREATE INDEX IF NOT EXISTS meta_requests_time ON meta_requests(at);`);
+      CREATE INDEX IF NOT EXISTS meta_requests_time ON meta_requests(at);
+      CREATE TABLE IF NOT EXISTS secretary_weekly(person_id TEXT PRIMARY KEY REFERENCES people(id),at INTEGER NOT NULL,text TEXT NOT NULL,model TEXT NOT NULL);`);
   }
   requestsToday() {
     const day = dayAt(this.#store.now(), 'Asia/Taipei');
@@ -30,6 +32,60 @@ export class MetaSecretary {
     return { enabled, model: enabled ? c.model : null,
       status: !c.enabled ? 'disabled' : !c.key ? 'key_missing' : used >= c.dailyLimit ? 'daily_limit' : this.#lastError ? 'fallback' : this.#busy ? 'connecting' : this.#lastSuccessAt ? 'active' : 'ready',
       requestsToday: used, dailyLimit: c.dailyLimit, lastSuccessAt: this.#lastSuccessAt, lastError: this.#lastError };
+  }
+  weekly(personId: string): { text: string; at: number; model: string } | null {
+    const row = this.#store.get('SELECT * FROM secretary_weekly WHERE person_id=?', personId);
+    return row ? { text: row.text, at: row.at, model: row.model } : null;
+  }
+  weeklyInput(personId: string) {
+    const s = this.#store, since = s.now() - 7 * 86400000;
+    const tz = s.get('SELECT w.timezone AS tz FROM people p JOIN workspaces w ON w.id=p.workspace_id WHERE p.id=?', personId)?.tz || 'Asia/Taipei';
+    const notes = s.all('SELECT * FROM secretary_notes WHERE person_id=? AND at>=? ORDER BY at ASC LIMIT 20', personId, since)
+      .map(r => ({ day: dayAt(r.at, tz), title: String(r.title).slice(0, 60), body: String(r.body).slice(0, 200) }));
+    if (notes.length < 3) return null;
+    const answers = s.all("SELECT topic,answer_json FROM questions WHERE person_id=? AND status='answered' AND answer_json IS NOT NULL ORDER BY created_at DESC LIMIT 10", personId)
+      .map(q => { const a = JSON.parse(q.answer_json); return { day: dayAt(a.observedAt, tz), question: String(q.topic), answer: String(a.elseText || a.label || '').slice(0, 200) }; })
+      .filter(a => a.answer);
+    const checkins = Number(s.get("SELECT count(*) n FROM events WHERE person_id=? AND kind='checkin' AND observed_at>=?", personId, since)!.n);
+    const name = s.get('SELECT name FROM people WHERE id=?', personId)!.name;
+    return { personName: String(name).slice(0, 40), weekLabel: `${dayAt(since, tz)}～${dayAt(s.now(), tz)}`, notes, answers, checkins };
+  }
+  async weeklyTick(): Promise<void> {
+    const s = this.#store, c = this.#config, via = this.#openApi || this.#api, model = this.#openApi ? c.openModel : c.model;
+    if (this.#busy || this.#stopped || this.#blocked || !c.enabled || (!c.key && !this.#openApi)) return;
+    if (!this.#openApi && this.requestsToday() >= c.dailyLimit) return;
+    for (const p of s.all('SELECT id FROM people WHERE demo=0')) {
+      const prior = s.get('SELECT at FROM secretary_weekly WHERE person_id=?', p.id);
+      if (prior && s.now() - prior.at < 7 * 86400000) continue;
+      const req = s.get('SELECT at,error_code FROM meta_requests WHERE person_id=? ORDER BY id DESC LIMIT 1', p.id);
+      const cooldown = req?.error_code ? Math.max(300000, c.intervalMs) : c.intervalMs;
+      if (req && s.now() - req.at < cooldown) continue;
+      const input = this.weeklyInput(p.id);
+      if (!input) continue;
+      this.#busy = true;
+      s.run("INSERT INTO meta_requests(person_id,at,model,status) VALUES(?,?,?,'pending')", p.id, s.now(), model);
+      this.#requestId = Number(s.get('SELECT last_insert_rowid() AS id')!.id);
+      try {
+        const result = await via.weeklyReview(input, this.#abort.signal);
+        if (this.#stopped) return;
+        s.transaction(() => {
+          s.run('UPDATE meta_requests SET status=?,input_tokens=?,output_tokens=? WHERE id=?', 'accepted', result.inputTokens, result.outputTokens, this.#requestId!);
+          s.run('INSERT INTO secretary_weekly VALUES(?,?,?,?) ON CONFLICT(person_id) DO UPDATE SET at=excluded.at,text=excluded.text,model=excluded.model', p.id, s.now(), result.text, model);
+        });
+        this.#lastError = null; this.#lastSuccessAt = s.now();
+      } catch (error) {
+        if (this.#stopped) return;
+        const code = error instanceof MetaApiError ? error.code : 'internal_error';
+        this.#lastError = code;
+        if (['http_400', 'http_401', 'http_403', 'http_404'].includes(code)) this.#blocked = true;
+        s.run("UPDATE meta_requests SET status='error',error_code=? WHERE id=?", code, this.#requestId!);
+      } finally { this.#busy = false; this.#requestId = null; }
+      return;
+    }
+  }
+  latestDecision(personId: string): ContextDecision | null {
+    const row = this.#store.get('SELECT decision_json FROM meta_decisions WHERE person_id=?', personId);
+    return row ? JSON.parse(row.decision_json) : null;
   }
   decision(personId: string, local: ContextDecision): ContextDecision | null {
     if (!this.#config.enabled || !this.#config.key || this.#lastError || this.#stopped) return null;

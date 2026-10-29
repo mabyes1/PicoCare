@@ -1,7 +1,7 @@
 import type { ContextDecision } from '../shared/protocol.ts';
 import type { ContextSample } from './context-engine.ts';
 
-export type MetaConfig = { enabled: boolean; key: string; model: string; intervalMs: number; dailyLimit: number; maxTokens: number; notificationText: boolean };
+export type MetaConfig = { enabled: boolean; key: string; model: string; intervalMs: number; dailyLimit: number; maxTokens: number; notificationText: boolean; openKey: string; openModel: string };
 export function metaConfig(env: NodeJS.ProcessEnv = process.env): MetaConfig {
   const number = (key: string, fallback: number, min: number, max: number) => {
     const n = Number(env[key] ?? fallback);
@@ -9,12 +9,14 @@ export function metaConfig(env: NodeJS.ProcessEnv = process.env): MetaConfig {
     return n;
   };
   const key = (env.MODEL_API_KEY || '').trim(), model = env.PICOCARE_META_MODEL || 'muse-spark-1.3';
-  if (/[\r\n]/.test(key) || !/^[a-z0-9._-]{1,80}$/.test(model)) throw new Error('Meta settings contain invalid characters');
+  const openKey = (env.BASENTEN_API_KEY || '').trim(), openModel = env.BASENTEN_MODEL || 'muse-spark-open-1026';
+  if (/[\r\n]/.test(key) || /[\r\n]/.test(openKey) || !/^[a-z0-9._-]{1,80}$/.test(model) || !/^[a-z0-9./_-]{1,120}$/i.test(openModel)) throw new Error('Meta settings contain invalid characters');
   return { enabled: env.PICOCARE_META_ENABLED === 'true', key, model,
     intervalMs: number('PICOCARE_META_INTERVAL_SECONDS', 120, 60, 86400) * 1000,
     dailyLimit: number('PICOCARE_META_DAILY_LIMIT', 60, 1, 10000),
-    maxTokens: number('PICOCARE_META_MAX_TOKENS', 1536, 512, 8192), notificationText: env.PICOCARE_META_NOTIFICATION_TEXT === 'true' };
+    maxTokens: number('PICOCARE_META_MAX_TOKENS', 1536, 512, 8192), notificationText: env.PICOCARE_META_NOTIFICATION_TEXT === 'true', openKey, openModel };
 }
+export const basetenBaseUrl = 'https://inference.baseten.co/v1';
 export type MetaFact = { id: string; eventId: string; observedAt: number; label: string };
 export type MetaInput = { observedAt: number; facts: MetaFact[]; gates: { videoWait: boolean; outingConfirm: boolean }; signature: string };
 const recent = (at: number, now: number) => at <= now && now - at <= 120000;
@@ -93,17 +95,24 @@ alternatives 和 gaps 預設都回 []。只有實際證據互相矛盾，或有�
 顯示給本人的文字不得提及 gate、JSON、API、內部規則門檻或套件 ID。只回傳指定 JSON。`;
 export class MetaApiError extends Error { code: string; constructor(code: string) { super(code); this.code = code; } }
 export type MetaResult = { decision: ContextDecision; inputTokens: number; outputTokens: number };
+export type EndpointOverride = { baseUrl: string; key: string; model: string; structured: boolean };
 export class MetaApi {
   #config: MetaConfig;
   #fetch: typeof fetch;
-  constructor(config: MetaConfig, fetcher: typeof fetch = fetch) { this.#config = config; this.#fetch = fetcher; }
+  #ep: EndpointOverride | null;
+  constructor(config: MetaConfig, fetcher: typeof fetch = fetch, endpoint: EndpointOverride | null = null) { this.#config = config; this.#fetch = fetcher; this.#ep = endpoint; }
+  #url() { return `${this.#ep?.baseUrl || 'https://api.meta.ai/v1'}/chat/completions`; }
+  #authKey() { return this.#ep?.key || this.#config.key; }
+  #modelName() { return this.#ep?.model || this.#config.model; }
+  #structured() { return this.#ep?.structured ?? true; }
   async infer(input: MetaInput, now: number, signal?: AbortSignal): Promise<MetaResult> {
+    if (!this.#structured()) throw new Error('structured output required');
     const timeout = AbortSignal.timeout(20000);
     let response: Response;
     try {
-      response = await this.#fetch('https://api.meta.ai/v1/chat/completions', { method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-        headers: { Authorization: `Bearer ${this.#config.key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.#config.model, messages: [{ role: 'developer', content: instruction }, { role: 'user', content: JSON.stringify({ observedAt: input.observedAt, facts: input.facts, gates: input.gates }) }],
+      response = await this.#fetch(this.#url(), { method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        headers: { Authorization: `Bearer ${this.#authKey()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.#modelName(), messages: [{ role: 'developer', content: instruction }, { role: 'user', content: JSON.stringify({ observedAt: input.observedAt, facts: input.facts, gates: input.gates }) }],
           reasoning_effort: 'low', max_completion_tokens: this.#config.maxTokens,
           response_format: { type: 'json_schema', json_schema: { name: 'picocare_situation', strict: true, schema } } }) });
     } catch { throw new MetaApiError('network_or_timeout'); }
@@ -137,13 +146,47 @@ export class MetaApi {
         at: now, validUntil: Math.min(now + 120000, input.observedAt + 120000) }, inputTokens: tokens(raw.usage?.prompt_tokens), outputTokens: tokens(raw.usage?.completion_tokens) };
     } catch { throw new MetaApiError('invalid_output'); }
   }
+  async weeklyReview(args: { personName: string; weekLabel: string; notes: { day: string; title: string; body: string }[]; answers: { day: string; question: string; answer: string }[]; checkins: number }, signal?: AbortSignal): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+    const timeout = AbortSignal.timeout(30000), structured = this.#structured();
+    const extra = structured ? { reasoning_effort: 'low', response_format: { type: 'json_schema', json_schema: { name: 'picocare_weekly_review', strict: true, schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } }, required: ['text'] } } } } : {};
+    const developer = '你是 PicoCare 照護秘書，用臺灣繁體中文寫一段給家人的本週回顧，不超過 400 字。只能用提供的動態、本人回答與報安次數來寫；時間、數字、事件都必須來自資料，不可捏造、不可腦補原因。語氣溫暖簡短，像家人轉述近況。可以提值得關心的變化，但只能建議家人打電話聊聊，不做醫療診斷、不評估健康、不說已確認平安、不報警不就醫。不要提及 gate、JSON、API 或內部規則。只回傳指定 JSON。' + (structured ? '' : '格式範例：{"text": "本週回顧內容"}，只用 text 這個欄位，不要用 markdown 包起來，也不要加其他文字。');
+    let response: Response;
+    try {
+      response = await this.#fetch(this.#url(), { method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        headers: { Authorization: `Bearer ${this.#authKey()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.#modelName(), messages: [{ role: 'developer', content: developer }, { role: 'user', content: JSON.stringify(args) }],
+          max_completion_tokens: this.#config.maxTokens, ...extra }) });
+    } catch { throw new MetaApiError('network_or_timeout'); }
+    if (!response.ok) { await response.body?.cancel(); throw new MetaApiError(`http_${response.status}`); }
+    try {
+      const reader = response.body?.getReader(); if (!reader) throw new Error();
+      const chunks: Uint8Array[] = []; let size = 0;
+      while (true) { const r = await reader.read(); if (r.done) break; size += r.value.length; if (size > 65536) { await reader.cancel(); throw new Error(); } chunks.push(r.value); }
+      const raw = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const choice = raw.choices?.[0];
+      if (choice?.finish_reason !== 'stop' || choice.message?.refusal || typeof choice.message?.content !== 'string') throw new Error();
+      const content: string = choice.message.content;
+      const b = (() => { try { return JSON.parse(content); } catch {
+        const start = content.indexOf('{'), end = content.lastIndexOf('}');
+        if (start < 0 || end <= start) throw new Error();
+        return JSON.parse(content.slice(start, end + 1));
+      } })();
+      const text = [b.text, b.reviewText, b.summary, b.content].find(v => typeof v === 'string' && v.trim());
+      if (!text || text.length > 400) throw new Error();
+      if (/建議.{0,8}(服藥|用藥|就醫)|應.{0,4}(服藥|就醫)|已經?(報警|就醫)|診斷為|已(確認)?平安|已(自動)?報安/.test(text)) throw new Error();
+      if (/\bgates?\b|\bJSON\b|\bAPI\b/i.test(text)) throw new Error();
+      const tokens = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0;
+      return { text: text.trim(), inputTokens: tokens(raw.usage?.prompt_tokens), outputTokens: tokens(raw.usage?.completion_tokens) };
+    } catch { throw new MetaApiError('invalid_output'); }
+  }
   async reviewElse(args: { prompt: string; options: { label: string }[]; elseText: string }, signal?: AbortSignal): Promise<{ review: 'clarified' | 'needs_contact' | 'pending'; summary: string; inputTokens: number; outputTokens: number }> {
+    if (!this.#structured()) throw new Error('structured output required');
     const timeout = AbortSignal.timeout(20000);
     let response: Response;
     try {
-      response = await this.#fetch('https://api.meta.ai/v1/chat/completions', { method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-        headers: { Authorization: `Bearer ${this.#config.key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.#config.model, messages: [{ role: 'developer', content: '你是 PicoCare 的補充整理助手。長輩在一題照顧問題選了「以上都不符合」並寫了一段補充，你只能根據這題與這段補充判斷：clarified（補充已回答問題、目前不需要協助）、needs_contact（補充明確表示需要聯絡或求助）、pending（補充含糊、與問題無關、或無法釐清）。不要做醫療診斷，不要編造本人沒說的事，原文永遠保留，你的整理只是建議。summary 用臺灣繁體中文一句話，不超過 200 字，不要寫已確認平安、醫療診斷、報警等絕對字眼，也不要提及 gate、JSON 或 API。只回傳指定 JSON。' }, { role: 'user', content: JSON.stringify(args) }],
+      response = await this.#fetch(this.#url(), { method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        headers: { Authorization: `Bearer ${this.#authKey()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.#modelName(), messages: [{ role: 'developer', content: '你是 PicoCare 的補充整理助手。長輩在一題照顧問題選了「以上都不符合」並寫了一段補充，你只能根據這題與這段補充判斷：clarified（補充已回答問題、目前不需要協助）、needs_contact（補充明確表示需要聯絡或求助）、pending（補充含糊、與問題無關、或無法釐清）。不要做醫療診斷，不要編造本人沒說的事，原文永遠保留，你的整理只是建議。summary 用臺灣繁體中文一句話，不超過 200 字，不要寫已確認平安、醫療診斷、報警等絕對字眼，也不要提及 gate、JSON 或 API。只回傳指定 JSON。' }, { role: 'user', content: JSON.stringify(args) }],
           reasoning_effort: 'low', max_completion_tokens: this.#config.maxTokens,
           response_format: { type: 'json_schema', json_schema: { name: 'picocare_else_review', strict: true, schema: { type: 'object', additionalProperties: false, properties: { review: { type: 'string', enum: ['clarified', 'needs_contact', 'pending'] }, summary: { type: 'string' } }, required: ['review', 'summary'] } } } }) });
     } catch { throw new MetaApiError('network_or_timeout'); }

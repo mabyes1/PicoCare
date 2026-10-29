@@ -23,6 +23,44 @@ object SelfInsight {
         lines.add("分享細度：${if (c.optString("sharing") == "detailed") "詳細分享" else "摘要"}；原始證據保留在本機時間線")
         return lines.joinToString("\n")
     }
+    fun metaPreview(server: JSONObject, estimatedServerNow: Long): String {
+        val secretary = server.optJSONObject("secretary")
+        val latest = secretary?.optJSONObject("latestMeta")
+            ?: secretary?.optJSONObject("decision")?.takeIf { it.optString("source") == "meta" }
+            ?: return "還沒有 Meta 判斷。"
+        val lines = mutableListOf(latest.optString("title"))
+        latest.optString("reason").takeIf { it.isNotBlank() }?.let { lines.add(it) }
+        val stamp = if (latest.optLong("validUntil") <= estimatedServerNow) "上次結果" else "判讀時間"
+        lines.add("$stamp：${time(latest.optLong("at"))}")
+        latest.optString("model").takeIf { it.isNotBlank() }?.let { lines.add(it) }
+        return lines.joinToString("\n")
+    }
+    data class Note(val id: String, val at: Long, val kind: String, val title: String, val body: String, val evidence: List<String>, val source: String)
+    fun notes(server: JSONObject, limit: Int = 8): List<Note> {
+        val items = server.optJSONObject("secretary")?.optJSONArray("notes") ?: return emptyList()
+        return buildList {
+            for (i in 0 until minOf(items.length(), limit)) {
+                val n = items.optJSONObject(i) ?: continue
+                val raw = n.optJSONArray("evidence")
+                val labels = buildList { if (raw != null) for (j in 0 until raw.length()) { val e = raw.optJSONObject(j) ?: continue; add("• ${e.optString("label")}") } }
+                add(Note(n.optString("id"), n.optLong("at"), n.optString("kind"), n.optString("title"), n.optString("body"), labels, n.optString("source")))
+            }
+        }
+    }
+    data class Weekly(val text: String, val at: Long, val model: String)
+    fun weekly(server: JSONObject): Weekly? {
+        val w = server.optJSONObject("secretary")?.optJSONObject("weekly") ?: return null
+        val text = w.optString("text")
+        return if (text.isBlank()) null else Weekly(text, w.optLong("at"), w.optString("model"))
+    }
+    data class Thinking(val title: String, val reason: String, val observedAt: Long)
+    fun thinking(server: JSONObject, estimatedServerNow: Long): Thinking {
+        val d = server.optJSONObject("secretary")?.optJSONObject("decision")
+            ?: return Thinking("還沒有想法", "手機資料可以先留在本機；連上服務後才會產生服務端的情境猜測。", 0)
+        val stale = d.optLong("validUntil") <= estimatedServerNow
+        return Thinking(d.optString("title") + if (stale) "（需要更新）" else "",
+            d.optString("reason").takeIf { it.isNotBlank() } ?: "維持原本關心流程，等待可用證據。", d.optLong("at"))
+    }
     fun interpretation(server: JSONObject, estimatedServerNow: Long): String {
         val secretary = server.optJSONObject("secretary"); val d = secretary?.optJSONObject("decision")
         if (d == null) return "還沒收到秘書判讀。手機資料可以先留在本機；連上服務後才會產生服務端的情境猜測。"

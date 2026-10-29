@@ -139,6 +139,13 @@ export function parseEvent(value: unknown, now: number): DeviceEvent {
 export function dayAt(time: number, timezone: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(time);
 }
+const clockFormatters = new Map<string, Intl.DateTimeFormat>();
+export function wallClock(at: number, zone: string): string {
+  let fmt = clockFormatters.get(zone);
+  if (!fmt) { fmt = new Intl.DateTimeFormat('en-CA', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); clockFormatters.set(zone, fmt); }
+  const p = Object.fromEntries(fmt.formatToParts(at).map(p => [p.type, p.value]));
+  return `${p.hour}:${p.minute}`;
+}
 export function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   if (value !== null && typeof value === 'object') return '{' + Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => JSON.stringify(k) + ':' + canonical(v)).join(',') + '}';

@@ -26,6 +26,9 @@ class CareConfig(context: Context) {
     val paired: Boolean get() = prefs.contains("token")
     val selfMode: Boolean get() = prefs.getBoolean("self_mode", false)
     val ready: Boolean get() = paired || selfMode
+    var debugMode: Boolean
+        get() = prefs.getBoolean("debug_mode", false)
+        set(value) { prefs.edit().putBoolean("debug_mode", value).apply() }
     fun beginSelf(name: String) {
         require(!paired && name.trim().isNotEmpty() && name.length <= 40) { "請先輸入自己的稱呼" }
         val request = prefs.getString("self_request", null) ?: UUID.randomUUID().toString()

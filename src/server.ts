@@ -78,7 +78,7 @@ export function makeServer(store: CareStore, options: { allowDemo?: boolean; sch
       else res.end();
     }
   });
-  const tick = () => { try { store.flow.tick(); void store.secretary.model?.tick().catch(() => console.error('Meta scheduler failed')); } catch (error) { console.error('Care scheduler failed:', error instanceof Error ? error.name : 'unknown'); } };
+  const tick = () => { try { store.flow.tick(); void store.secretary.model?.tick().catch(() => console.error('Meta scheduler failed')); void store.secretary.model?.weeklyTick().catch(() => console.error('Meta weekly scheduler failed')); } catch (error) { console.error('Care scheduler failed:', error instanceof Error ? error.name : 'unknown'); } };
   let timer: ReturnType<typeof setInterval> | undefined;
   server.on('listening', () => { tick(); timer = setInterval(tick, options.schedulerIntervalMs ?? 5000); timer.unref(); });
   server.on('close', () => { if (timer) clearInterval(timer); store.secretary.model?.close(); });

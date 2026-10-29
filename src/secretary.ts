@@ -7,13 +7,15 @@ import { LocalSituationInterpreter } from './context-engine.ts';
 import type { ContextSample, SituationInterpreter } from './context-engine.ts';
 import { outingQuestion, metaOutingQuestion } from './questions.ts';
 import type { MetaSecretary } from './meta-secretary.ts';
+import { SecretaryNotes } from './notes.ts';
 type Row = Record<string, any>;
 const minute = 60000;
 export class Secretary {
   interpreter: SituationInterpreter = new LocalSituationInterpreter();
   model: MetaSecretary | null = null;
+  notes: SecretaryNotes;
   constructor(store: CareStore) {
-    this.s = store;
+    this.s = store; this.notes = new SecretaryNotes(store);
     store.db.exec(`CREATE TABLE IF NOT EXISTS secretary_state(person_id TEXT PRIMARY KEY REFERENCES people(id),input_key TEXT NOT NULL,decision_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS secretary_decisions(id INTEGER PRIMARY KEY AUTOINCREMENT,person_id TEXT NOT NULL REFERENCES people(id),at INTEGER NOT NULL,decision_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS secretary_cases(id TEXT PRIMARY KEY,person_id TEXT NOT NULL REFERENCES people(id),created_at INTEGER NOT NULL,deadline INTEGER,question_id TEXT NOT NULL,state TEXT NOT NULL,reason TEXT NOT NULL,decision_json TEXT NOT NULL);
@@ -36,7 +38,9 @@ export class Secretary {
     const q = this.s.get("SELECT topic,answer_json FROM questions WHERE person_id=? AND topic IN ('video','outing') AND status='answered' AND answer_json IS NOT NULL ORDER BY created_at DESC LIMIT 1", personId);
     const answer = q ? JSON.parse(q.answer_json) : null;
     const confirmation = answer?.review === 'clarified' ? { topic: q!.topic, text: answer.elseText || answer.label, observedAt: answer.observedAt } : null;
-    return { decision: this.decision(personId), outing: r ? { id: r.id, state: r.state, createdAt: r.created_at, deadline: r.deadline, questionId: r.question_id, reason: r.reason, decision: JSON.parse(r.decision_json) } as SecretaryCase : null, confirmation };
+    return { decision: this.decision(personId), latestMeta: this.model?.latestDecision(personId) || null,
+      outing: r ? { id: r.id, state: r.state, createdAt: r.created_at, deadline: r.deadline, questionId: r.question_id, reason: r.reason, decision: JSON.parse(r.decision_json) } as SecretaryCase : null, confirmation,
+      notes: this.notes.recent(personId), weekly: this.model?.weekly(personId) || null };
   }
   finish(r: Row, state: string, reason: string) {
     this.s.run('UPDATE secretary_cases SET state=?,reason=?,deadline=NULL WHERE id=?', state, reason, r.id);
@@ -96,6 +100,7 @@ export class Secretary {
         this.s.run('INSERT INTO secretary_state VALUES(?,?,?) ON CONFLICT(person_id) DO UPDATE SET input_key=excluded.input_key,decision_json=excluded.decision_json', p.id, key, body);
         this.s.run('INSERT INTO secretary_decisions(person_id,at,decision_json) VALUES(?,?,?)', p.id, this.s.now(), body);
       }
+      this.notes.tick(p.id);
       const current = this.current(p.id), plan = this.s.flow.plan(p.id);
       if (current && ['question_pending', 'deferred'].includes(current.state)) {
         if (!plan.contextualEnabled) this.finish(current, 'cancelled', '情境主動確認已停用');
@@ -111,6 +116,7 @@ export class Secretary {
       const caseId = randomUUID(), reason = '外出線索出現變化，已主動問一題，等待本人釐清';
       this.s.run('INSERT INTO secretary_cases VALUES(?,?,?,?,?,?,?,?)', caseId, p.id, this.s.now(), q.expiresAt, q.id, 'question_pending', reason, JSON.stringify(d));
       this.s.run('INSERT INTO reminders(id,person_id,created_at,expires,question_id) VALUES(?,?,?,?,?)', randomUUID(), p.id, this.s.now(), q.expiresAt, q.id);
+      this.notes.askedOuting(p.id, d);
     }
   }
 }

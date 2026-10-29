@@ -37,7 +37,7 @@ npm start -- --demo
 
 工具根目錄內應包含 `jdk-17`、`android-sdk`、`gradle-8.13`。也可自行設定 `JAVA_HOME`、`ANDROID_HOME` 後，以 Gradle 對 `android/` 執行 `assembleDebug lintDebug`。
 
-建置輸出是 **未簽署 APK**：`android/app/build/outputs/apk/debug/app-debug-unsigned.apk`。獨立實測套件為 `tw.picocare.meta`（保留舊 `tw.picocare.app`），versionCode 108，versionName `1.0.0-meta.9`。建置腳本不簽署、不安裝、不建立簽署金鑰。安裝至既有同套件手機前，須使用相容的既有簽署方式，保留原資料。建置同時跑 Lint 與 JVM／Robolectric 測試；第一次需要從正式套件庫取得測試依賴與 Android 測試執行環境，依賴已快取時可加 `-Offline`。
+建置輸出是 **未簽署 APK**：`android/app/build/outputs/apk/debug/app-debug-unsigned.apk`。獨立實測套件為 `tw.picocare.meta`（保留舊 `tw.picocare.app`），versionCode 110，versionName `1.0.0-meta.11`。建置腳本不簽署、不安裝、不建立簽署金鑰。安裝至既有同套件手機前，須使用相容的既有簽署方式，保留原資料。建置同時跑 Lint 與 JVM／Robolectric 測試；第一次需要從正式套件庫取得測試依賴與 Android 測試執行環境，依賴已快取時可加 `-Offline`。
 
 本機手機開發連線可在已授權 ADB 裝置使用：
 
@@ -84,7 +84,7 @@ Meta 官方 API 接線見 [META.md](META.md)。後端使用 `.env.local` 的 `MO
 
 ## 目前驗證與下一步
 
-已通過 TypeScript 型別檢查、網頁建置及 72 個 Node 測試，涵蓋真實 HTTP、持久化、時效、資料隔離、選項／ELSE、浮動問候與冷卻、延期、超時、不重複提醒、服務重啟、舊庫升級、舊版關心表相容與跨日。Android 有 22 個 JVM／Robolectric 測試：持續導航保留、定位時效／速度誤差、SQLite 升級、離線保留、送達後保留證據、優先補傳、日期查詢及回答回執。
+已通過 TypeScript 型別檢查、網頁建置及 73 個 Node 測試，涵蓋真實 HTTP、持久化、時效、資料隔離、選項／ELSE、浮動問候與冷卻、延期、超時、不重複提醒、服務重啟、舊庫升級、舊版關心表相容、最近 Meta 結果保留與跨日。Android 有 22 個 JVM／Robolectric 測試：持續導航保留、定位時效／速度誤差、SQLite 升級、離線保留、送達後保留證據、優先補傳、日期查詢及回答回執。
 
 瀏覽器合成驗證實際操作了建立空間、配對、儲存關心時間、自動產生一題、超時提醒、查看證據、標為已讀及明確結案。合成手機與可控時鐘用於本機流程測試；沒有使用真實長輩資料，也沒有開啟瀏覽器通知權限來觸發 OS 通知。
 
