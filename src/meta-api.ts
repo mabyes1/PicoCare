@@ -12,13 +12,14 @@ export function metaConfig(env: NodeJS.ProcessEnv = process.env): MetaConfig {
   const openKey = (env.BASENTEN_API_KEY || '').trim(), openModel = env.BASENTEN_MODEL || 'muse-spark-open-1026';
   if (/[\r\n]/.test(key) || /[\r\n]/.test(openKey) || !/^[a-z0-9._-]{1,80}$/.test(model) || !/^[a-z0-9./_-]{1,120}$/i.test(openModel)) throw new Error('Meta settings contain invalid characters');
   return { enabled: env.PICOCARE_META_ENABLED === 'true', key, model,
-    intervalMs: number('PICOCARE_META_INTERVAL_SECONDS', 120, 60, 86400) * 1000,
+    // Batch judgments: collect continuously, ask the cloud at most ~4x/day.
+    intervalMs: number('PICOCARE_META_INTERVAL_SECONDS', 21600, 60, 86400) * 1000,
     dailyLimit: number('PICOCARE_META_DAILY_LIMIT', 60, 1, 10000),
     maxTokens: number('PICOCARE_META_MAX_TOKENS', 1536, 512, 8192), notificationText: env.PICOCARE_META_NOTIFICATION_TEXT === 'true', openKey, openModel };
 }
 export const basetenBaseUrl = 'https://inference.baseten.co/v1';
 export type MetaFact = { id: string; eventId: string; observedAt: number; label: string };
-export type MetaInput = { observedAt: number; facts: MetaFact[]; gates: { videoWait: boolean; outingConfirm: boolean }; signature: string };
+export type MetaInput = { observedAt: number; facts: MetaFact[]; gates: { videoWait: boolean; outingConfirm: boolean }; signature: string; stateKey: string };
 const recent = (at: number, now: number) => at <= now && now - at <= 120000;
 
 export function metaInput(samples: ContextSample[], now: number, local: ContextDecision, includeText = false): MetaInput | null {
@@ -65,16 +66,19 @@ export function metaInput(samples: ContextSample[], now: number, local: ContextD
   const videoSamples = samples.filter(s => s.context.media?.state === 'playing').length;
   const aggregate = { points: locs.length, travelled: Math.round(travelled), revisit, navCount, videoSamples };
   add(last, `聚合線索（最近樣本，不含座標）：定位點 ${aggregate.points} 個、移動總距離約 ${aggregate.travelled} 公尺、重訪 ${aggregate.revisit ? '是' : '否'}、導航通知 ${aggregate.navCount} 次、影音播放樣本 ${aggregate.videoSamples} 個`);
-  // A plain serialized comparison key, never a digest. Times are excluded so a
+  // Plain serialized comparison keys, never digests. Times are excluded so a
   // repeated sample doesn't invalidate an in-flight result with unchanged facts.
+  // stateKey additionally excludes the running aggregate, so an idle phone with
+  // accumulating samples still compares equal and skips a redundant judgment.
   const c = last.context;
-  const signature = JSON.stringify({ promptVersion: 'wild-2', aggregate, battery: c.batteryPercent, charging: c.charging, interactive: c.screenInteractive, network: c.network, sources: c.sources,
+  const state = { battery: c.batteryPercent, charging: c.charging, interactive: c.screenInteractive, network: c.network, sources: c.sources,
     usage: c.sources?.usage === 'available' && c.usage && recent(c.usage.observedAt, now) ? [c.usage.appId, c.usage.category] : null,
     media: c.sources?.media === 'available' && c.media && recent(c.media.observedAt, now) ? [c.media.appId, c.media.state] : null,
     motion: c.motionEvidence && recent(c.motionEvidence.observedAt, now) ? c.motion : 'unknown',
     notes: c.notifications.filter(n => recent(n.observedAt, now)).map(n => [n.category, includeText && c.sharing === 'detailed' ? n.text : null]),
-    gates: [local.scenario, local.action] });
-  return { observedAt: last.at, facts, signature, gates: { videoWait: local.scenario === 'video' && local.action === 'wait', outingConfirm: local.scenario === 'outing' && local.action === 'confirm' } };
+    gates: [local.scenario, local.action] };
+  const signature = JSON.stringify({ promptVersion: 'wild-2', aggregate, ...state });
+  return { observedAt: last.at, facts, signature, stateKey: JSON.stringify(state), gates: { videoWait: local.scenario === 'video' && local.action === 'wait', outingConfirm: local.scenario === 'outing' && local.action === 'confirm' } };
 }
 
 const schema = { type: 'object', additionalProperties: false,

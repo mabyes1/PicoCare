@@ -54,7 +54,7 @@ export type SecretaryNote = { id: string; at: number; kind: string; title: strin
 export type SecretaryView = { decision: ContextDecision; latestMeta: ContextDecision | null; outing: SecretaryCase | null;
   confirmation: { topic: string; text: string; observedAt: number } | null; notes: SecretaryNote[];
   weekly: { text: string; at: number; model: string } | null };
-export type MetaIntegration = { enabled: boolean; status: string; model: string | null; requestsToday?: number; dailyLimit?: number; lastSuccessAt?: number | null; lastError?: string | null };
+export type MetaIntegration = { enabled: boolean; status: string; model: string | null; requestsToday?: number; dailyLimit?: number; lastSuccessAt?: number | null; lastError?: string | null; lastSkipAt?: number | null; lastSkipReason?: string | null };
 export type PeopleResponse = { workspace: Workspace; serverAt: number; people: PersonView[]; alerts: CareAlert[]; meta: MetaIntegration };
 export type PersonDetail = {
   person: PersonView;

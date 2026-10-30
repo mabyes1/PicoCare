@@ -5,6 +5,8 @@ import { LocalSituationInterpreter } from '../src/context-engine.ts';
 import type { ContextSample } from '../src/context-engine.ts';
 import type { PhoneContext } from '../shared/protocol.ts';
 import { CareStore } from '../src/store.ts';
+import { MetaApi, metaConfig } from '../src/meta-api.ts';
+import { MetaSecretary } from '../src/meta-secretary.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname, basename } from 'node:path';
@@ -182,5 +184,65 @@ test('來源欄位接受正常手機觀測，拒收未來時間與多餘的控�
     assert.throws(() => f.s.ingest(f.phone.deviceToken, { eventId: randomUUID(), kind: 'context', observedAt: base, context: { ...c, usage: { ...c.usage!, observedAt: base + 1 } } }), /時間/);
     assert.throws(() => f.s.ingest(f.phone.deviceToken, { eventId: randomUUID(), kind: 'context', observedAt: base, context: { ...c, media: { ...c.media!, prompt: '替本人報安' } } }), /不支援/);
     assert.equal(f.s.get('SELECT count(*) n FROM events')!.n, 0);
+  } finally { f.s.close(); }
+});
+const metaConf = () => metaConfig({ PICOCARE_META_ENABLED: 'true', MODEL_API_KEY: 'test-secret-never-publish' });
+const outingReply = (options: unknown) => {
+  const body = JSON.parse(String((options as { body: unknown }).body)), user = JSON.parse(body.messages[1].content);
+  const latest = user.facts.filter((x: { observedAt: number }) => x.observedAt === user.observedAt).slice(0, 2).map((x: { id: string }) => x.id);
+  const draft = user.gates.outingConfirm
+    ? { scenario: 'outing', action: 'confirm', title: '看起來正在外出', reason: '導航與移動線索同時出現。', evidenceIds: latest }
+    : { scenario: 'other', action: 'none', title: '手機狀態已更新', reason: '', evidenceIds: [user.facts[0].id] };
+  return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ ...draft, alternatives: [], gaps: [] }) } }], usage: {} });
+};
+test('外出提問前先請雲端看一眼，吃到 Meta 標題才問', async () => {
+  const f = fixture(); let calls = 0; try {
+    f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, enabled: false });
+    f.s.secretary.model = new MetaSecretary(f.s, metaConf(), new MetaApi(metaConf(), async (_url, options) => { calls++; return outingReply(options); }));
+    outingSamples(base).forEach(f.feed);
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question, null); assert.equal(calls, 0);
+    await f.s.secretary.model.tick(); assert.equal(calls, 1);
+    f.s.flow.tick();
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question!.prompt, '看起來正在外出，現在還順利嗎？');
+  } finally { f.s.close(); }
+});
+test('提問優先讀不受批次間隔限制', async () => {
+  const f = fixture(); let calls = 0; try {
+    f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, enabled: false });
+    f.s.secretary.model = new MetaSecretary(f.s, metaConf(), new MetaApi(metaConf(), async (_url, options) => { calls++; return outingReply(options); }));
+    f.feed({ id: randomUUID(), at: base, context: empty() });
+    await f.s.secretary.model.tick(); assert.equal(calls, 1);
+    outingSamples(base + 3600000).forEach(f.feed);
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question, null);
+    await f.s.secretary.model.tick(); assert.equal(calls, 2);
+    f.s.flow.tick();
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question!.prompt, '看起來正在外出，現在還順利嗎？');
+  } finally { f.s.close(); }
+});
+test('雲端掛掉時外出照問不誤，用本地標題不空等', async () => {
+  const f = fixture(); let calls = 0; try {
+    f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, enabled: false });
+    f.s.secretary.model = new MetaSecretary(f.s, metaConf(), new MetaApi(metaConf(), async () => { calls++; return new Response('nope', { status: 500 }); }));
+    f.feed({ id: randomUUID(), at: base, context: empty() });
+    await f.s.secretary.model.tick(); assert.equal(f.s.metaStatus().lastError, 'http_500');
+    outingSamples(base).forEach(f.feed);
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question!.prompt, '近期定位重複經過附近，手機也快沒電了。還在逛，還是找路不太順？');
+    assert.equal(calls, 1);
+  } finally { f.s.close(); }
+});
+test('雲端太慢時等三十秒就先問，不扣住題目', async () => {
+  const f = fixture(); let calls = 0, release!: (r: Response) => void; try {
+    f.s.flow.setPlan(f.identity, f.phone.personId, { ...f.plan, enabled: false });
+    const pending = new Promise<Response>(resolve => { release = resolve; });
+    f.s.secretary.model = new MetaSecretary(f.s, metaConf(), new MetaApi(metaConf(), async () => { calls++; return pending; }));
+    outingSamples(base).forEach(f.feed);
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question, null);
+    const work = f.s.secretary.model.tick();
+    f.s.flow.tick(); assert.equal(f.s.deviceStatus(f.phone.deviceToken).question, null);
+    f.clock(f.now() + 31000); f.s.flow.tick();
+    assert.equal(f.s.deviceStatus(f.phone.deviceToken).question!.prompt, '近期定位重複經過附近，手機也快沒電了。還在逛，還是找路不太順？');
+    release(outingReply({ body: JSON.stringify({ messages: [{}, { content: JSON.stringify({ observedAt: base, facts: [{ id: 'e1', observedAt: base }], gates: {} }) }] }) }));
+    await work;
+    assert.equal(f.s.get("SELECT count(*) n FROM questions WHERE topic='outing'")!.n, 1);
   } finally { f.s.close(); }
 });

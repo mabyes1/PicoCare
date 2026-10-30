@@ -108,6 +108,14 @@ export class Secretary {
       }
       const d = this.decision(p.id);
       if (!plan.contextualEnabled || p.help_id || d.action !== 'confirm' || d.validUntil <= this.s.now() || !this.s.flow.cooldownOk(p.id, plan.cooldownMinutes) || current && (['question_pending', 'deferred', 'escalated'].includes(current.state) || this.s.now() - current.created_at < 6 * 3600000)) continue;
+      // Ask-time judgment: local wants to ask but the cloud hasn't weighed in.
+      // Hold the question briefly for one priority read; never hold it hostage.
+      if (d.source !== 'meta' && this.model?.canAttempt() && !this.model.hasFreshRead(p.id)) {
+        const waited = this.model.priorityWaited(p.id);
+        if (waited === null) { this.model.requestPriority(p.id); continue; }
+        if (waited < 30000) continue;
+      }
+      this.model?.clearPriority(p.id);
       // A specific outing concern replaces a generic check-in question, retaining the old question as cancelled history.
       for (const run of this.s.all("SELECT * FROM care_runs WHERE person_id=? AND state IN ('waiting','observing','question_pending','deferred')", p.id)) this.s.flow.finish(run, 'cancelled', '外出變化優先確認，日常報安提問已讓位');
       this.s.run("UPDATE reminders SET result='cancelled',completed_at=? WHERE person_id=? AND result='pending'", this.s.now(), p.id);

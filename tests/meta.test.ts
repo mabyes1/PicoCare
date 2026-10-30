@@ -107,13 +107,33 @@ test('同時輪詢只呼叫一次，新資料改變情境時丟棄較晚返回�
 });
 
 test('快取跟隨證據與時效，資料改變或過期就使用本地判讀', async () => {
-  const f = fixture();
+  const f = fixture(); let calls = 0;
   try {
-    f.ingest(); f.store.secretary.model = new MetaSecretary(f.store, config(), new MetaApi(config(), async () => reply())); await f.store.secretary.model.tick();
+    f.ingest(); f.store.secretary.model = new MetaSecretary(f.store, { ...config(), intervalMs: 120000 }, new MetaApi(config(), async () => { calls++; return reply(); }));
+    await f.store.secretary.model.tick();
     assert.equal(f.store.secretary.decision(f.person.personId).source, 'meta');
     f.advance(121000); f.store.flow.tick(); assert.equal(f.store.secretary.decision(f.person.personId).source, 'local_evidence');
-    f.ingest(); await f.store.secretary.model.tick(); assert.equal(f.store.secretary.decision(f.person.personId).source, 'meta');
-    const changed = sample(f.now()); changed.context.charging = true; f.ingest(changed); assert.equal(f.store.secretary.decision(f.person.personId).source, 'local_evidence');
+    // 間隔到了但證據沒變：不重打，維持本地判讀，並留下跳過原因。
+    f.ingest(); await f.store.secretary.model.tick(); assert.equal(calls, 1);
+    assert.equal(f.store.secretary.decision(f.person.personId).source, 'local_evidence');
+    assert.equal(f.store.metaStatus().lastSkipReason, 'unchanged');
+    // 證據變化且間隔到：重打，回到雲端判讀。
+    const changed = sample(f.now()); changed.context.charging = true; f.ingest(changed);
+    await f.store.secretary.model.tick(); assert.equal(calls, 2);
+    assert.equal(f.store.secretary.decision(f.person.personId).source, 'meta');
+  } finally { f.store.close(); }
+});
+
+test('雲端判讀預設一天最多約四次，開源模型呼叫不佔用 Meta 額度', async () => {
+  assert.equal(config().intervalMs, 21600000);
+  const f = fixture(); let calls = 0;
+  try {
+    f.ingest(); const c = { ...config(), dailyLimit: 1 };
+    f.store.secretary.model = new MetaSecretary(f.store, c, new MetaApi(c, async () => { calls++; return reply(); }));
+    f.store.run("INSERT INTO meta_requests(person_id,at,model,status,kind) VALUES(?,?,?,?,'weekly')", f.person.personId, f.now(), c.openModel, 'accepted');
+    assert.equal(f.store.secretary.model.requestsToday(), 0);
+    await f.store.secretary.model.tick(); assert.equal(calls, 1);
+    assert.equal(f.store.metaStatus().status, 'daily_limit');
   } finally { f.store.close(); }
 });
 
@@ -135,12 +155,13 @@ test('最近 Meta 結果保留給本人查看，過期後不套用到現況，�
 
 test('呼叫間隔與每日限額計入失敗請求，重建 worker 也不洗掉計數', async () => {
   const f = fixture(); let calls = 0;
+  const changed = (charging: boolean) => { const s = sample(f.now()); s.context.charging = charging; f.ingest(s); };
   try {
-    f.ingest(); const c = { ...config(), dailyLimit: 2 }, api = new MetaApi(c, async () => { calls++; return reply(); });
+    f.ingest(); const c = { ...config(), dailyLimit: 2, intervalMs: 120000 }, api = new MetaApi(c, async () => { calls++; return reply(); });
     f.store.secretary.model = new MetaSecretary(f.store, c, api); await f.store.secretary.model.tick(); await f.store.secretary.model.tick(); assert.equal(calls, 1);
     f.store.secretary.model.close(); f.store.secretary.model = new MetaSecretary(f.store, c, api); await f.store.secretary.model.tick(); assert.equal(calls, 1);
-    f.advance(121000); f.ingest(); await f.store.secretary.model.tick(); assert.equal(calls, 2);
-    f.advance(121000); f.ingest(); await f.store.secretary.model.tick(); assert.equal(calls, 2); assert.equal(f.store.metaStatus().status, 'daily_limit');
+    f.advance(121000); changed(true); await f.store.secretary.model.tick(); assert.equal(calls, 2);
+    f.advance(121000); changed(false); await f.store.secretary.model.tick(); assert.equal(calls, 2); assert.equal(f.store.metaStatus().status, 'daily_limit');
   } finally { f.store.close(); }
 });
 
