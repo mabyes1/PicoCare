@@ -1,7 +1,7 @@
 import { AbsoluteFill, Sequence, interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import React from 'react';
 
-export const FONT = "'Microsoft JhengHei','PingFang TC','Noto Sans TC',sans-serif";
+export const FONT = "'Segoe UI','Inter','Helvetica Neue','PingFang TC','Noto Sans TC','Microsoft JhengHei',sans-serif";
 export const GREEN = '#205c4a';
 export const PAPER = '#f5f7f0';
 export const INK = '#31442f';
