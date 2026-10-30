@@ -1,43 +1,48 @@
-// Voiceover data: ffprobe durations + edge-tts VTT cue times (seconds, segment-local).
+// English voiceover: ffprobe durations + edge-tts VTT cue times (seconds, segment-local).
 export type VoCue = { start: number; end: number; zh: string; en: string };
 export type VoSeg = { file: string; dur: number; cues: VoCue[] };
 export const VO: VoSeg[] = [
-  { file: 'vo-0.mp3', dur: 3.216, cues: [
-    { start: 0.1, end: 3.2, zh: '有人在關心，但不想打擾。', en: 'Someone cares, without intruding.' },
+  { file: 'vo-en-0.mp3', dur: 3.072, cues: [
+    { start: 0.100, end: 3.062, zh: 'Someone cares, without intruding.', en: '' },
   ] },
-  { file: 'vo-1.mp3', dur: 10.464, cues: [
-    { start: 0.1, end: 4.687, zh: '獨居的媽媽，一天沒消息，你只能乾著急。', en: 'Her mom lives alone. A day of silence, and all you can do is worry.' },
-    { start: 4.637, end: 7.362, zh: '裝監控，侵犯隱私。', en: 'Cameras invade privacy.' },
-    { start: 7.362, end: 10.4, zh: '定時問候，又像在查勤。', en: 'Scheduled check-ins feel like roll calls.' },
+  { file: 'vo-en-1.mp3', dur: 11.424, cues: [
+    { start: 0.100, end: 2.225, zh: 'Her mom lives alone.', en: '' },
+    { start: 2.175, end: 5.862, zh: 'A day of silence, and all you can do is worry.', en: '' },
+    { start: 5.862, end: 8.300, zh: 'Cameras invade privacy.', en: '' },
+    { start: 8.300, end: 11.375, zh: 'Scheduled check-ins feel like roll calls.', en: '' },
   ] },
-  { file: 'vo-2.mp3', dur: 12.504, cues: [
-    { start: 0.1, end: 2.587, zh: 'PicoCare 換了一個做法。', en: 'PicoCare takes a different path.' },
-    { start: 2.537, end: 7.137, zh: '手機默默看，秘書動腦想，家人放心忙。', en: 'The phone watches quietly. The secretary thinks. The family rests easy.' },
-    { start: 7.137, end: 12.45, zh: '秘書每天把發現寫成動態，每一則後面都掛著證據。', en: 'Every day the secretary posts findings — each backed by evidence.' },
+  { file: 'vo-en-2.mp3', dur: 15.840, cues: [
+    { start: 0.100, end: 2.850, zh: 'PicoCare takes a different path.', en: '' },
+    { start: 2.800, end: 5.250, zh: 'The phone watches quietly.', en: '' },
+    { start: 5.250, end: 7.512, zh: 'The secretary thinks.', en: '' },
+    { start: 7.512, end: 9.862, zh: 'The family rests easy.', en: '' },
+    { start: 9.862, end: 15.787, zh: 'Every day, the secretary posts what it found, and every post carries its evidence.', en: '' },
   ] },
-  { file: 'vo-3.mp3', dur: 11.112, cues: [
-    { start: 0.1, end: 4.462, zh: '早上八點二十五，第一次看到手機亮起來。', en: '8:25 AM: the first sign of the phone lighting up.' },
-    { start: 4.412, end: 7.637, zh: '半夜十二點，手機還亮著。', en: 'Midnight: the phone is still on.' },
-    { start: 7.637, end: 11.062, zh: '只針對事實發揮，絕不捏造。', en: 'Only facts. Never invented.' },
+  { file: 'vo-en-3.mp3', dur: 10.992, cues: [
+    { start: 0.100, end: 4.337, zh: '8:25 AM: the first sign of the phone lighting up.', en: '' },
+    { start: 4.287, end: 7.125, zh: 'Midnight: the phone is still on.', en: '' },
+    { start: 7.125, end: 9.000, zh: 'Only facts.', en: '' },
+    { start: 9.000, end: 10.937, zh: 'Never invented.', en: '' },
   ] },
-  { file: 'vo-4.mp3', dur: 10.056, cues: [
-    { start: 0.1, end: 6.062, zh: '每個星期，Meta 把一週的動態讀完，寫成一段家人看得懂的話。', en: "Every week, Meta reads seven days of findings into one paragraph the family can understand." },
-    { start: 6.012, end: 10.0, zh: '不裝神祕，直說是開源模型整理的。', en: 'No mystery: it says plainly it was the open model.' },
+  { file: 'vo-en-4.mp3', dur: 10.200, cues: [
+    { start: 0.100, end: 6.350, zh: 'Every week, Meta reads seven days of findings into one paragraph the family can understand.', en: '' },
+    { start: 6.300, end: 10.137, zh: 'No mystery: it says plainly it was the open model.', en: '' },
   ] },
-  { file: 'vo-5.mp3', dur: 11.232, cues: [
-    { start: 0.1, end: 3.137, zh: '照顧者看到的是同一個 Ken。', en: 'The caregiver sees the same Ken.' },
-    { start: 3.087, end: 7.65, zh: '求助、時間線、處理結果，都在這裡。', en: 'Help, timeline, resolution — all here.' },
-    { start: 7.65, end: 11.162, zh: '先問本人，釐不清才找家人。', en: 'Ask the person first. Only then the family.' },
+  { file: 'vo-en-5.mp3', dur: 11.664, cues: [
+    { start: 0.100, end: 2.825, zh: 'The caregiver sees the same Ken.', en: '' },
+    { start: 2.775, end: 7.275, zh: 'Help requests, the timeline, what happened next, all here.', en: '' },
+    { start: 7.275, end: 9.525, zh: 'Ask the person first.', en: '' },
+    { start: 9.525, end: 11.600, zh: 'Only then the family.', en: '' },
   ] },
-  { file: 'vo-6.mp3', dur: 12.168, cues: [
-    { start: 0.1, end: 4.037, zh: '本地規則先守門，證據不夠就閉嘴。', en: 'Local rules stand guard: thin evidence means silence.' },
-    { start: 3.987, end: 8.062, zh: 'Meta 融合多條弱訊號，寫成一句關心。', en: 'Meta fuses weak signals into one caring line.' },
-    { start: 8.062, end: 12.1, zh: '拔掉 Meta，秘書就變回只會問候的鬧鐘。', en: 'Remove Meta and the secretary degrades into a greeting alarm.' },
+  { file: 'vo-en-6.mp3', dur: 12.720, cues: [
+    { start: 0.100, end: 4.425, zh: 'Local rules stand guard: thin evidence means silence.', en: '' },
+    { start: 4.375, end: 8.075, zh: 'Meta fuses weak signals into one caring line.', en: '' },
+    { start: 8.075, end: 12.662, zh: 'Remove Meta, and the secretary degrades into a greeting alarm.', en: '' },
   ] },
-  { file: 'vo-7.mp3', dur: 4.608, cues: [
-    { start: 0.1, end: 3.037, zh: '不碰醫療，只做關懷。', en: 'No medical advice. Only care.' },
-    { start: 2.987, end: 4.537, zh: 'PicoCare。', en: 'PicoCare.' },
+  { file: 'vo-en-7.mp3', dur: 5.712, cues: [
+    { start: 0.100, end: 2.237, zh: 'No medical advice.', en: '' },
+    { start: 2.187, end: 3.912, zh: 'Only care.', en: '' },
+    { start: 3.912, end: 5.650, zh: 'PicoCare.', en: '' },
   ] },
 ];
-// Absolute VO start frames in Main (30fps).
 export const VO_AT = [45, 330, 870, 1560, 2460, 3210, 3960, 4860];

@@ -3,7 +3,10 @@ import type { CareStore, Identity } from './store.ts';
 import type { DeviceEvent } from './domain.ts';
 import { dayAt, demand, object } from './domain.ts';
 import type { CarePlan, CareRun, CareAlert } from '../shared/protocol.ts';
+import { evidenceLabelEn } from './assessment.ts';
+import type { Lang } from './lang.ts';
 import { missedCheckinQuestion, videoQuestion } from './questions.ts';
+export const HELP_TITLE: Record<Lang, string> = { zh: '本人明確希望照顧者聯絡', en: 'The person explicitly asked the caregiver to make contact' };
 
 type Row = Record<string, any>;
 const minute = 60000;
@@ -19,6 +22,21 @@ function wall(at: number, zone: string) {
   return { day: `${p.year}-${p.month}-${p.day}`, clock: `${p.hour}:${p.minute}` };
 }
 
+// zh-TW short stamp ("2026/10/29 晚上9:25") → en-US short ("10/29/26, 9:25 PM").
+// Unknown shapes pass through untouched.
+export function zhStampEn(value: string): string {
+  const m = value.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2}) (凌晨|上午|中午|下午|晚上)(\d{1,2}):(\d{2})$/);
+  if (!m) return value;
+  const [, y, mo, d, part, h, mi] = m;
+  let hour = Number(h);
+  if (part === '凌晨') hour = hour % 12;
+  else if (part === '上午' || part === '中午') hour = hour === 12 ? (part === '上午' ? 0 : 12) : hour;
+  else hour = hour === 12 ? 12 : (hour % 12) + 12;
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${mo}/${d}/${String(y).slice(2)}, ${h12}:${mi} ${suffix}`;
+}
+
 export class CareWorkflow {
   constructor(privateStore: CareStore) {
     this.s = privateStore;
@@ -32,7 +50,7 @@ export class CareWorkflow {
     `);
     if (!storeHasColumn(this.s, 'care_plans', 'contextual_enabled')) this.s.db.exec('ALTER TABLE care_plans ADD COLUMN contextual_enabled INTEGER NOT NULL DEFAULT 1');
     if (!storeHasColumn(this.s, 'care_plans', 'cooldown')) this.s.db.exec('ALTER TABLE care_plans ADD COLUMN cooldown INTEGER NOT NULL DEFAULT 480');
-    for (const p of this.s.all('SELECT * FROM people WHERE demo=0 AND help_id IS NOT NULL')) this.alert(p.id, `event:${p.help_id}`, 'help', '本人明確希望照顧者聯絡', undefined, undefined, p.help_at);
+    for (const p of this.s.all('SELECT * FROM people WHERE demo=0 AND help_id IS NOT NULL')) this.alert(p.id, `event:${p.help_id}`, 'help', HELP_TITLE[this.s.lang()], undefined, undefined, p.help_at);
   }
   s: CareStore;
   plan(personId: string): CarePlan {
@@ -85,41 +103,63 @@ export class CareWorkflow {
     if (state !== 'cancelled') this.s.run('UPDATE care_alerts SET resolved_at=? WHERE run_id=? AND resolved_at IS NULL', this.s.now(), run.id);
     this.step(run, state, reason);
   }
-  evidence(personId: string): string[] {
+  evidence(personId: string, lang?: Lang): string[] {
+    const useLang = lang || this.s.lang(), en = useLang === 'en';
     const p = this.s.get('SELECT p.*,w.timezone FROM people p JOIN workspaces w ON w.id=p.workspace_id WHERE p.id=?', personId)!;
-    const stamp = (at: number) => new Intl.DateTimeFormat('zh-TW', { timeZone: p.timezone, dateStyle: 'short', timeStyle: 'short' }).format(at);
-    const lines = [p.last_seen === null ? '尚未收到手機同步' : `最後收到手機資料：${stamp(p.last_seen)}`];
+    const stamp = (at: number) => new Intl.DateTimeFormat(en ? 'en-US' : 'zh-TW', { timeZone: p.timezone, dateStyle: 'short', timeStyle: 'short' }).format(at);
+    const lines = [p.last_seen === null ? (en ? 'No phone sync received yet' : '尚未收到手機同步') : (en ? `Last phone data received: ${stamp(p.last_seen)}` : `最後收到手機資料：${stamp(p.last_seen)}`)];
     if (p.context_json) {
       const c = JSON.parse(p.context_json);
-      lines.push(`手機情境觀測：${stamp(p.context_at)}`);
-      if (c.batteryPercent !== null) lines.push(`當時電量 ${c.batteryPercent}%${c.charging === true ? '，充電中' : c.charging === false ? '，未充電' : '，充電狀態未知'}`);
-      lines.push(`取樣時網路：${c.network === 'online' ? '有經驗證連線' : c.network === 'offline' ? '沒有可用網路' : '未知'}`);
-      const assessment = this.s.provider.assess(c, p.context_at, this.s.now());
-      lines.push(...assessment.evidence.filter(e => !e.label.startsWith('電量')).map(e => `${e.label}（${stamp(e.observedAt)}）`), ...assessment.gaps.map(g => `資料缺口：${g}`));
+      lines.push(en ? `Phone context observed: ${stamp(p.context_at)}` : `手機情境觀測：${stamp(p.context_at)}`);
+      if (c.batteryPercent !== null) lines.push(en ? `Battery at the time ${c.batteryPercent}%${c.charging === true ? ', charging' : c.charging === false ? ', not charging' : ', charging state unknown'}` : `當時電量 ${c.batteryPercent}%${c.charging === true ? '，充電中' : c.charging === false ? '，未充電' : '，充電狀態未知'}`);
+      lines.push(en ? `Network at sample: ${c.network === 'online' ? 'verified connection' : c.network === 'offline' ? 'no usable network' : 'unknown'}` : `取樣時網路：${c.network === 'online' ? '有經驗證連線' : c.network === 'offline' ? '沒有可用網路' : '未知'}`);
+      const assessment = this.s.provider.assess(c, p.context_at, this.s.now(), useLang);
+      lines.push(...assessment.evidence.filter(e => !/^(電量|Battery)/.test(e.label)).map(e => en ? `${e.label} (${stamp(e.observedAt)})` : `${e.label}（${stamp(e.observedAt)}）`), ...assessment.gaps.map(g => en ? `Data gap: ${g}` : `資料缺口：${g}`));
     }
     return lines;
   }
   alert(personId: string, key: string, kind: 'help' | 'unclarified', title: string, run?: Row, question?: Row, sourceObservedAt?: number, extraEvidence: string[] = []) {
     const answer = question?.answer_json ? JSON.parse(question.answer_json) : null;
-    const payload = { title, evidence: [...this.evidence(personId), ...extraEvidence, ...(sourceObservedAt === undefined ? [] : [`本人發出請求的時間：${new Date(sourceObservedAt).toISOString()}`])], question: question?.prompt || null, answer: answer ? answer.elseText || answer.label : null };
+    const lang = this.s.lang();
+    const payload = { title, evidence: [...this.evidence(personId), ...extraEvidence, ...(sourceObservedAt === undefined ? [] : [(lang === 'en' ? 'Request sent at: ' : '本人發出請求的時間：') + new Date(sourceObservedAt).toISOString()])], question: question?.prompt || null, answer: answer ? answer.elseText || answer.label : null };
     this.s.run('INSERT OR IGNORE INTO care_alerts(id,source_key,person_id,run_id,kind,created_at,payload) VALUES(?,?,?,?,?,?,?)', randomUUID(), key, personId, run?.id || null, kind, this.s.now(), JSON.stringify(payload));
+  }
+  // Stored history keeps its original shells; known fixed templates are
+  // re-rendered into the active language at read time, values verbatim
+  // except zh-TW date stamps, which are re-rendered as en-US short.
+  localizeAlert(alert: { title: string; evidence: string[]; question: string | null; answer: string | null }): { title: string; evidence: string[]; question: string | null; answer: string | null } {
+    if (this.s.lang() !== 'en') return alert;
+    const title = alert.title === HELP_TITLE.zh ? HELP_TITLE.en : alert.title;
+    const evidence = (alert.evidence || []).map(line => {
+      let m = line.match(/^尚未收到手機同步$/); if (m) return 'No phone sync received yet';
+      m = line.match(/^最後收到手機資料：(.+)$/); if (m) return `Last phone data received: ${zhStampEn(m[1] || '')}`;
+      m = line.match(/^手機情境觀測：(.+)$/); if (m) return `Phone context observed: ${zhStampEn(m[1] || '')}`;
+      m = line.match(/^當時電量 (\d+)%(.*)$/); if (m) return `Battery at the time ${m[1]}%${(m[2] || '').replace('，充電中', ', charging').replace('，未充電', ', not charging').replace('，充電狀態未知', ', charging state unknown')}`;
+      m = line.match(/^取樣時網路：(.+)$/); if (m) return `Network at sample: ${(m[1] || '').replace('有經驗證連線', 'verified connection').replace('沒有可用網路', 'no usable network').replace('未知', 'unknown')}`;
+      m = line.match(/^本人發出請求的時間：(.+)$/); if (m) return `Request sent at: ${m[1]}`;
+      m = line.match(/^資料缺口：(.+)$/); if (m) return `Data gap: ${evidenceLabelEn(m[1] || '')}`;
+      m = line.match(/^(.+)（(.+)）$/); if (m) return `${evidenceLabelEn(m[1] || '')} (${zhStampEn(m[2] || '')})`;
+      return line;
+    });
+    return { ...alert, title, evidence };
   }
   alerts(identity: Identity, personId?: string): CareAlert[] {
     if (personId) this.s.person(identity, personId);
-    return this.s.all(`SELECT a.*,p.name FROM care_alerts a JOIN people p ON p.id=a.person_id WHERE p.workspace_id=? ${personId ? 'AND p.id=?' : ''} ORDER BY (a.resolved_at IS NULL) DESC,a.created_at DESC LIMIT 100`, identity.workspaceId, ...(personId ? [personId] : [])).map(a => ({ id: a.id, personId: a.person_id, personName: a.name, runId: a.run_id, kind: a.kind, createdAt: a.created_at, readAt: a.read_at, resolvedAt: a.resolved_at, ...JSON.parse(a.payload) }));
+    return this.s.all(`SELECT a.*,p.name FROM care_alerts a JOIN people p ON p.id=a.person_id WHERE p.workspace_id=? ${personId ? 'AND p.id=?' : ''} ORDER BY (a.resolved_at IS NULL) DESC,a.created_at DESC LIMIT 100`, identity.workspaceId, ...(personId ? [personId] : [])).map(a => ({ id: a.id, personId: a.person_id, personName: a.name, runId: a.run_id, kind: a.kind, createdAt: a.created_at, readAt: a.read_at, resolvedAt: a.resolved_at, ...this.localizeAlert(JSON.parse(a.payload)) }));
   }
   read(identity: Identity, alertId: string) {
     demand(this.s.get('SELECT a.id FROM care_alerts a JOIN people p ON p.id=a.person_id WHERE a.id=? AND p.workspace_id=?', alertId, identity.workspaceId), '找不到這則提醒', 404);
     this.s.run('UPDATE care_alerts SET read_at=COALESCE(read_at,?) WHERE id=?', this.s.now(), alertId); return { saved: true };
   }
   escalate(run: Row, reason: string) {
+    const en = this.s.lang() === 'en';
     const q = run.question_id ? this.s.get('SELECT * FROM questions WHERE id=?', run.question_id) : undefined;
-    let delivery = '問題尚未由手機回報顯示結果';
+    let delivery = en ? 'The phone has not reported whether the question was shown' : '問題尚未由手機回報顯示結果';
     if (q) {
       const r = this.s.get('SELECT result FROM reminders WHERE question_id=? ORDER BY created_at DESC LIMIT 1', q.id);
-      if (r?.result === 'executed') delivery = '手機已執行通知顯示流程，是否看到仍未知';
-      else if (r?.result === 'declined') delivery = '手機回報無法顯示通知';
-      if (q.answer_json) delivery = q.status === 'answered_late' ? '已收到延遲回答，仍需確認目前情況' : '本人已回答這題，原文附於提醒';
+      if (r?.result === 'executed') delivery = en ? 'The phone ran the notification flow; whether it was seen is unknown' : '手機已執行通知顯示流程，是否看到仍未知';
+      else if (r?.result === 'declined') delivery = en ? 'The phone reported it cannot show notifications' : '手機回報無法顯示通知';
+      if (q.answer_json) delivery = q.status === 'answered_late' ? (en ? 'A late answer arrived; the current situation still needs confirming' : '已收到延遲回答，仍需確認目前情況') : (en ? 'The person answered; the original text is attached to the alert' : '本人已回答這題，原文附於提醒');
     }
     const full = `${reason}；${delivery}`;
     this.s.run("UPDATE care_runs SET state='escalated',reason=? WHERE id=?", full, run.id);
@@ -130,7 +170,7 @@ export class CareWorkflow {
   onEvent(personId: string, event: DeviceEvent, review?: string, reportsCheckin = false) {
     const run = this.current(personId);
     if (event.kind === 'help' || review === 'needs_contact') {
-      this.alert(personId, `event:${event.eventId}`, 'help', '本人明確希望照顧者聯絡', undefined, event.questionId ? this.s.get('SELECT * FROM questions WHERE id=?', event.questionId) : undefined, event.observedAt);
+      this.alert(personId, `event:${event.eventId}`, 'help', HELP_TITLE[this.s.lang()], undefined, event.questionId ? this.s.get('SELECT * FROM questions WHERE id=?', event.questionId) : undefined, event.observedAt);
       if (run && ['waiting', 'observing', 'question_pending', 'deferred', 'escalated'].includes(run.state)) this.finish(run, 'resolved', '本人已明確求助，改由求助待辦接手');
       return;
     }
@@ -146,7 +186,7 @@ export class CareWorkflow {
       const deadline = this.s.now() + this.plan(personId).deferMinutes * minute;
       this.s.run("UPDATE care_runs SET state='deferred',deadline=?,reason=? WHERE id=?", deadline, '本人表示暫時不方便；延後等待直接報安，不重複提問', run.id);
       this.step(run, 'deferred', '本人選擇晚點回覆，已延長等待且不再問第二題');
-    } else if (review === 'pending') this.escalate(run, '本人補充的情況仍需照顧者釐清');
+    } else if (review === 'pending') this.escalate(run, this.s.lang() === 'en' ? 'The follow-up still needs the caregiver to clarify' : '本人補充的情況仍需照顧者釐清');
   }
   tick() {
     this.s.transaction(() => {
@@ -168,12 +208,12 @@ export class CareWorkflow {
             const sourcesKnown = latest && this.s.now() - latest.at <= 120000 && latest.context.sources?.usage === 'available' && latest.context.sources.media === 'available';
             if (video || !sourcesKnown) continue;
           }
-          const q = this.s.ask(p.id, run.state === 'observing' ? videoQuestion() : missedCheckinQuestion(), plan.responseMinutes * minute);
+          const q = this.s.ask(p.id, run.state === 'observing' ? videoQuestion(this.s.lang()) : missedCheckinQuestion(this.s.lang()), plan.responseMinutes * minute);
           if (run.state === 'observing') this.s.secretary.notes.askedVideo(p.id, d);
           this.s.run("UPDATE care_runs SET state='question_pending',question_id=?,deadline=?,reason=? WHERE id=?", q.id, q.expiresAt, '已提出一題，等待手機領取與本人回覆', run.id);
           this.s.run('INSERT INTO reminders(id,person_id,created_at,expires,question_id) SELECT ?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM reminders WHERE question_id=?)', randomUUID(), p.id, this.s.now(), q.expiresAt, q.id, q.id);
           this.step(run, 'question_queued', run.state === 'observing' ? '影音線索改變或延後期限到達，現在詢問本人確認' : '到關心時間仍未報安，已排入一題與手機提醒');
-        } else if (run.deadline !== null && this.s.now() >= run.deadline) this.escalate(run, run.state === 'deferred' ? '延後等待結束，仍未收到本人報安' : '回答等待時間結束，仍未釐清近況');
+        } else if (run.deadline !== null && this.s.now() >= run.deadline) this.escalate(run, run.state === 'deferred' ? (this.s.lang() === 'en' ? 'Deferred wait ended with no check-in received' : '延後等待結束，仍未收到本人報安') : (this.s.lang() === 'en' ? 'Answer wait ended; the situation is still unclear' : '回答等待時間結束，仍未釐清近況'));
       }
       for (const p of this.s.all('SELECT p.*,w.timezone,c.cooldown FROM people p JOIN workspaces w ON w.id=p.workspace_id JOIN care_plans c ON c.person_id=p.id WHERE c.enabled=1 AND p.demo=0')) {
         const day = dayAt(this.s.now(), p.timezone);

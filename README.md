@@ -1,19 +1,40 @@
-# PicoCare
+# PicoCare — a care secretary for elderly parents
 
-讓照顧者與機構，從最近的手機線索了解生活情境，完成報安、聯絡與求助處理。
+> Meta Global AI Developer Hackathon 2026 · Indie track · Theme: Build for Your World
 
-產品主線與下一階段架構以 [PRODUCT.md](PRODUCT.md) 為準：以長輩的個人照護秘書為中心，先向本人確認疑問，未釐清再提醒照顧者。下文記錄目前開發版已完成的資料流程。
+PicoCare watches an elderly parent's phone for **observable clues only** (foreground app, media playback, notifications, location, battery), fuses them into a living feed, asks the parent first when something is worth checking, and hands clear evidence to family caregivers only when things stay unclear. It never diagnoses, never gives medical advice, and never auto-alerts — care coordination, not healthcare.
 
-## 技術選擇
+**One line:** the phone watches quietly, the secretary thinks with Meta, the family rests easy.
 
-- **Kotlin / Android**：原生權限、通知、位置來源、前景連線、SQLite 本地證據時間線及待送佇列。
-- **TypeScript / Node.js 24.12+**：後端與網頁；共用的 API 型別位於 `shared/protocol.ts`。
-- **SQLite**：配對、照顧空間、情境、事件回執、每日關心流程、照顧者提醒匣及聯絡紀錄。
-- 後端沒有外部 runtime 套件；TypeScript compiler 與 Node 型別是開發依賴。
+- Demo video (3 min, English VO): _link on submission day_
+- Vertical cut (40 s): _link on submission day_
+- Dated build log: [docs/build-log.md](docs/build-log.md) — everything here was built 26–30 Oct 2026.
+- Chinese docs: [README_ZH.md](README_ZH.md) (full manual), [PRODUCT.md](PRODUCT.md) (product), [SECRETARY.md](SECRETARY.md) (scenario engine), [META.md](META.md) (Meta integration), [FIELD.md](FIELD.md) (field test).
 
-## 啟動
+The app is bilingual (English default, 中文一鍵切換). The backend stores per-language output history and serves the active language.
 
-先安裝 Node.js 24.12 或更新版本。在解壓後的專案根目錄執行：
+## What Meta does (the part local rules cannot)
+
+| Job | Model | Why only Meta can do it |
+|---|---|---|
+| Weekly review for family | `muse-spark-open-1026` via Baseten (falls back to `muse-spark-1.3`) | Reads 7 days of notes + answers + checkins, writes a warm ≤400-char paragraph. No template can do this. |
+| Situation reading | `muse-spark-1.3` | Fuses weak signals (e.g. long walk + repeated navigation + draining battery) into one caring question. |
+| ELSE free-text triage | `muse-spark-1.3` | Parent picks "none of the above" and writes freely; Meta judges clarified / needs-contact / pending. |
+
+Local deterministic rules stay as gate + fallback: insufficient evidence means silence, and every Meta output passes medical/finite-output guardrails before it is stored or shown. No coordinates or notification text reach the model — only counts, distances and category labels.
+
+## How it works
+
+1. The Android app (`tw.picocare.meta`) collects on-device samples into a 7-day local evidence timeline with a pending outbox.
+2. The Node backend evaluates the situation (`src/context-engine.ts`), runs the floating greeting schedule with cooldown (`src/workflow.ts`), and writes proactive opinion notes (`src/notes.ts`, max 6/day).
+3. The phone's Insight tab shows the secretary's thinking, the weekly review, and the feed wall — newest first, each post citing its evidence.
+4. Open questions carry options plus a per-question ELSE box; unclarified items escalate to the paired caregiver with evidence and the parent's own words.
+
+The caregiver counterpart (`tw.picocare.meta.care`, "PicoCare Caregiver") shows the same person: people list, person detail with weekly review, alerts, contact filing and help resolution — same backend, cookie session, no shared identity with the elder phone.
+
+## Run it
+
+Requires Node.js 24.12+. No runtime dependencies beyond the standard library.
 
 ```powershell
 npm install
@@ -23,82 +44,33 @@ npm run build
 npm start -- --demo
 ```
 
-開啟 <http://127.0.0.1:4317>。建立個人或機構照顧空間後，可配對手機；`--demo` 額外啟用「加入示範」，合成對象會明確標記。示範時間固定在建立當下，之後會正常過期。
+Open <http://127.0.0.1:4317>. Default DB is `.local/care.sqlite` (`PICOCARE_DB` overrides); loopback only. For the Meta layer, copy `.env.example` to `.env.local`, set `MODEL_API_KEY`, and run `npm run start:meta`. Never commit `.env.local`.
 
-預設資料庫在 `.local/care.sqlite`。可用 `PICOCARE_DB` 指定獨立資料位置，以 `PORT` 更改埠號。服務僅綁定 loopback；目前供本機開發，尚未提供公網部署、正式帳號登入與帳號恢復。瀏覽器使用 HttpOnly 工作階段，有效 24 小時；關閉分頁不會刪除資料庫。
-
-## 手機建置
-
-需要 JDK 17、Android SDK 35 / Build Tools 35.0.0、Gradle 8.13。Kotlin 2.2.21 / AGP 8.9.2 會由 Gradle 取得。
+Switch language (also flips server-side output + backfill):
 
 ```powershell
-.\scripts\build-android.ps1 -ToolRoot D:\DevTools\PhoneMonitorAndroid
+curl -X POST http://127.0.0.1:4317/api/lang -H "Authorization: Bearer <device-token>" -H "Content-Type: application/json" -d '{"lang":"en"}'
 ```
 
-工具根目錄內應包含 `jdk-17`、`android-sdk`、`gradle-8.13`。也可自行設定 `JAVA_HOME`、`ANDROID_HOME` 後，以 Gradle 對 `android/` 執行 `assembleDebug lintDebug`。
-
-建置輸出是 **未簽署 APK**：`android/app/build/outputs/apk/debug/app-debug-unsigned.apk`。獨立實測套件為 `tw.picocare.meta`（保留舊 `tw.picocare.app`），versionCode 110，versionName `1.0.0-meta.11`。建置腳本不簽署、不安裝、不建立簽署金鑰。安裝至既有同套件手機前，須使用相容的既有簽署方式，保留原資料。建置同時跑 Lint 與 JVM／Robolectric 測試；第一次需要從正式套件庫取得測試依賴與 Android 測試執行環境，依賴已快取時可加 `-Offline`。
-
-本機手機開發連線可在已授權 ADB 裝置使用：
+Android field apps: needs JDK 17, Android SDK 35, Gradle 8.13:
 
 ```powershell
-adb -s 指定裝置序號 reverse tcp:4317 tcp:4317
+.\scripts\build-android.ps1 -Offline
+.\scripts\build-field.ps1 -OutputDirectory .local/apks -Flavor elder
+.\scripts\build-field.ps1 -OutputDirectory .local/apks -Flavor care
 ```
 
-然後在手機配對畫面輸入 `http://127.0.0.1:4317` 和網頁產生的配對碼。一般網址要求 HTTPS；本機 HTTP 只允許 loopback。
+Output is two dev-signed APKs (`tw.picocare.meta` elder side, `tw.picocare.meta.care` caregiver side, v1.0.0-meta.15). The build script runs Lint plus JVM/Robolectric unit tests for both flavors.
 
-## 已實作流程
+## Verification
 
-1. 建立個人／機構照顧空間，資料按空間隔離。
-2. 網頁產生十分鐘有效的一次性配對碼；手機配對重試使用固定 requestId。
-3. 手機送出電量、充電、網路、裝置可互動與鈴聲狀態。可選通知情境、近期位置／移動與詳細分享。通知發布時間與當下觀測分開；移動依據保留原始定位時間、速度誤差與精度，摘要模式也保留這些依據。
-4. SQLite 在同一交易記錄本地證據與待送事件，保持事件 ID 重送；成功收件後移出佇列，證據留在手機七日。斷網保留各次取樣，求助／回答優先補傳；永久拒收保留待檢查。過期的情境取樣按保留期清理，未送達的本人回答／求助不因保留期直接刪除。
-5. 網頁顯示最近狀況、依據、觀測時間、本人回覆及獨立求助；每五秒更新。
-6. 照顧者發出報安提醒，手機領取、顯示問題通知並送回執行結果。提醒和問題共用有效期限；執行顯示不代表本人已看到。
-7. 求助由照顧者明確完成；過期頁面不能關閉已更新的求助。本人報安保留尚未處理的求助。
-8. 發出報安提醒時，同時提供一題本機範例問題；手機顯示二至三個選項及「以上都不符合」。一般選項直接回覆，ELSE 才能輸入最多 200 字的當題補充。回答先持久化再重送，沒有主動發問或聊天 API。
-9. 照顧者可查看問題、本人選項／補充和釐清狀態。ELSE 先標為待釐清；延遲答案保留為證據，明確請求聯絡直接保留為求助。
-10. 手機「本機證據時間線」可選日期，查看當日筆數、取樣筆數、已送達筆數和最新 60 筆證據；顯示觀測時間、來源缺口及傳送結果。
+- `npm run check` clean, `npm test` 93/93 (HTTP, persistence, schedule, cooldown, bilingual output).
+- Android: `assembleElderDebug assembleCareDebug lintElderDebug lintCareDebug testElderDebugUnitTest testCareDebugUnitTest` green, 33 tests per flavor.
+- Real-device field test on Samsung S23: pairing, sync, questions, check-in/help round-trip, permissions, caregiver cross-check with live data.
 
-## 自動關心：沒報安 → 問一題 → 交給照顧者
+## Submission checklist
 
-在配對對象的詳情開啟「主動關心」，依照顧空間時區執行，沒有固定問候時間。預設關閉；白天啟用當天就能問。觀察、回答與忙碌延期各可設定 1–240 分鐘，預設為 15／30／30 分鐘；兩次提問至少相隔冷卻時間，可設定 60–1440 分鐘，預設 480 分鐘（8 小時）。
-
-1. 秘書每天挑本人方便的時候（近期有用手機）開局一次；整天沒動靜，晚上八點保底問一次；深夜不開新題。今天已報安就結束，不再問。
-2. 開局後先觀察幾分鐘（看片線索在這時決定是否延後），再提出一題：「今天還沒收到你的報安，現在方便回覆一下嗎？」提供目前不需要協助、現在忙晚點回覆、請照顧者聯絡，以及 ELSE。
-3. 正常回覆結案；忙碌延長等待、不問第二題，期間可直接報安；明確求助立即形成獨立提醒；ELSE 原文交給照顧者釐清。
-4. 沒有回答或延期後仍沒報安，建立一份持久提醒，附原始證據、時間、問題、當時回答及通知顯示結果。問題未送達或通知無法顯示，會如實記錄。
-5. 照顧者可標為已讀；「已聯絡並確認近況」才結束關心事項。本人新的直接報安也可結束未釐清事項；既有求助仍需照顧者另外完成處理。
-
-排程每五秒由後端檢查，不依賴照顧者頁面輪詢。重開服務延續同一題、期限與提醒；同一件未結案事項跨日仍保留，不每天重複問。修改設定停止仍在等待的自動流程，已交給照顧者的提醒繼續保留。冷卻期間不開新題，有外出線索也等冷卻過後再問；本人主動報安與求助不受冷卻限制。這個開發版尚未學習個人作息或判定健康狀態。
-
-## 照顧者提醒配送
-
-提醒匣存於服務端 SQLite，重新整理或重開服務都能讀回。桌面通知需要使用者按「開啟桌面通知」授權，且頁面仍在執行、連得上服務；瀏覽器可能延後背景計時器。關掉頁面後，目前沒有 Web Push／簡訊／Email 配送。手機也需要服務可執行及網路才能領取問題與回傳回答。
-
-## Meta 接點
-
-Meta 官方 API 接線見 [META.md](META.md)。後端使用 `.env.local` 的 `MODEL_API_KEY`，模型預設 `muse-spark-1.3`，呼叫間隔與每日次數可設定；沒有 Key 或請求失敗時保留本地判讀。
-
-`src/meta-api.ts` 整理證據並驗證模型結構化輸出，`src/meta-secretary.ts` 管理非阻塞排程、快取及持久化次數。模型可描述一般生活情境；延期／主動確認仍須符合既有證據門檻。模型沒有自動報安或直接通知照顧者的能力。
-
-## 目前驗證與下一步
-
-已通過 TypeScript 型別檢查、網頁建置及 73 個 Node 測試，涵蓋真實 HTTP、持久化、時效、資料隔離、選項／ELSE、浮動問候與冷卻、延期、超時、不重複提醒、服務重啟、舊庫升級、舊版關心表相容、最近 Meta 結果保留與跨日。Android 有 22 個 JVM／Robolectric 測試：持續導航保留、定位時效／速度誤差、SQLite 升級、離線保留、送達後保留證據、優先補傳、日期查詢及回答回執。
-
-瀏覽器合成驗證實際操作了建立空間、配對、儲存關心時間、自動產生一題、超時提醒、查看證據、標為已讀及明確結案。合成手機與可控時鐘用於本機流程測試；沒有使用真實長輩資料，也沒有開啟瀏覽器通知權限來觸發 OS 通知。
-
-手機已通過 `assembleDebug` 與 `lintDebug`，Lint 為 0 errors / 2 warnings（target SDK 35 與實測預設稱呼的國際化提示）。安裝、手機端待送佇列、鎖屏背景連線、位置／通知授權與真機端到端仍需實測。前景服務在可執行時每 30 秒嘗試同步，Android 深度休眠可能延後；目前不承諾固定的即時更新間隔。選用且已授權的位置會在前景服務中請求更新，仍只接收夠新的來源；沒有資料會保留未知。
-
-接續工作：用相容簽署在 Android 真機跑完整往返及鎖屏／斷網情境、每日生活摘要、正式帳號／邀請及恢復、公網 HTTPS 與背景提醒配送。Meta 已接線，設定與合成費用對照見 META.md。
-
-
-## 情境秘書核心
-
-已加入看片忘記報安與外出變化主動確認；條件、採集、限制與合成重播步驟見 [SECRETARY.md](SECRETARY.md)。
-
-
-
-## 本人實測入口
-
-安裝 PicoCare-Field.apk 後可按「開始使用我的秘書」，不需要先建立照顧者空間。手機直接顯示本機觀測、秘書猜測、依據、其他解釋和自己的回答。安裝及 USB 連線步驟見 FIELD.md。
+- [ ] Public repo (this one), no secrets, no field data, no build cache
+- [ ] 3-minute demo video, real device footage only, English VO
+- [ ] Team member names on the submission form
+- [ ] Optional: vertical cut posted on X for Most Viral

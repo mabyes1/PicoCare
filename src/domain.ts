@@ -139,6 +139,14 @@ export function parseEvent(value: unknown, now: number): DeviceEvent {
 export function dayAt(time: number, timezone: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(time);
 }
+export function startOfDay(at: number, timezone: string): number {
+  const day = dayAt(at, timezone);
+  let t = at - (at % 3600000);
+  while (dayAt(t, timezone) === day) t -= 3600000;
+  t += 3600000;
+  while (dayAt(t, timezone) !== day) t += 60000;
+  return t;
+}
 const clockFormatters = new Map<string, Intl.DateTimeFormat>();
 export function wallClock(at: number, zone: string): string {
   let fmt = clockFormatters.get(zone);

@@ -37,9 +37,9 @@ class PermissionFlowTest {
     @Test fun selectingForegroundSourceAndSavingLaunchesItsMissingPermission() {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
-            texts(controller.get().window.decorView).first { it.text.toString() == "選擇資料來源" }.performClick()
+            texts(controller.get().window.decorView).first { it.text.toString() == "Choose data sources" }.performClick()
             val dialog = ShadowAlertDialog.getLatestAlertDialog()
-            texts(dialog.window!!.decorView).filterIsInstance<CheckBox>().first { it.text.toString().startsWith("前景 App") }.isChecked = true
+            texts(dialog.window!!.decorView).filterIsInstance<CheckBox>().first { it.text.toString().startsWith("Foreground-app hints") }.isChecked = true
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
             shadowOf(android.os.Looper.getMainLooper()).idle()
             assertTrue(CareConfig(context).prefs.getBoolean("usage", false))
@@ -51,11 +51,11 @@ class PermissionFlowTest {
     @Test fun settingsShortcutRetainsUnsavedSourceChoices() {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
-            texts(controller.get().window.decorView).first { it.text.toString() == "選擇資料來源" }.performClick()
+            texts(controller.get().window.decorView).first { it.text.toString() == "Choose data sources" }.performClick()
             val dialog = ShadowAlertDialog.getLatestAlertDialog()
             val views = texts(dialog.window!!.decorView)
-            views.filterIsInstance<CheckBox>().first { it.text.toString().startsWith("前景 App") }.isChecked = true
-            views.first { it.text.toString() == "儲存並開使用權限" }.performClick()
+            views.filterIsInstance<CheckBox>().first { it.text.toString().startsWith("Foreground-app hints") }.isChecked = true
+            views.first { it.text.toString() == "Save & open usage access" }.performClick()
             assertTrue(CareConfig(context).prefs.getBoolean("usage", false))
             assertFalse(dialog.isShowing)
             assertEquals(Settings.ACTION_USAGE_ACCESS_SETTINGS, shadowOf(controller.get()).nextStartedActivity.action)
@@ -67,14 +67,14 @@ class PermissionFlowTest {
         try {
             shadowOf(android.os.Looper.getMainLooper()).idle()
             val before = texts(controller.get().window.decorView)
-            assertTrue(before.any { it.text.toString().contains("前景 App：已選用，Android 尚未授權") })
-            assertEquals(View.VISIBLE, before.first { it.text.toString() == "開啟 App 使用權限" }.visibility)
+            assertTrue(before.any { it.text.toString().contains("Foreground app: On, not granted yet") })
+            assertEquals(View.VISIBLE, before.first { it.text.toString() == "Allow app-usage access" }.visibility)
             controller.pause()
             shadowOf(context.getSystemService(AppOpsManager::class.java)).setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName, AppOpsManager.MODE_ALLOWED)
             controller.resume(); shadowOf(android.os.Looper.getMainLooper()).idle()
             val after = texts(controller.get().window.decorView)
-            assertTrue(after.any { it.text.toString().contains("前景 App：已選用，Android 已授權") })
-            assertEquals(View.GONE, after.first { it.text.toString() == "開啟 App 使用權限" }.visibility)
+            assertTrue(after.any { it.text.toString().contains("Foreground app: On, granted in Android") })
+            assertEquals(View.GONE, after.first { it.text.toString() == "Allow app-usage access" }.visibility)
         } finally { controller.pause().stop().destroy() }
     }
 }

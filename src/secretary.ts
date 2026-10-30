@@ -29,7 +29,7 @@ export class Secretary {
   }
   decision(personId: string): ContextDecision {
     const row = this.s.get('SELECT decision_json FROM secretary_state WHERE person_id=?', personId);
-    const local = row ? JSON.parse(row.decision_json) : this.interpreter.evaluate([], this.s.now());
+    const local = row ? JSON.parse(row.decision_json) : this.interpreter.evaluate([], this.s.now(), this.s.lang());
     return this.model?.decision(personId, local) || local;
   }
   current(personId: string): Row | undefined { return this.s.get('SELECT * FROM secretary_cases WHERE person_id=? ORDER BY created_at DESC LIMIT 1', personId); }
@@ -96,7 +96,7 @@ export class Secretary {
       const key = `tone-2/${samples.length}/${samples[0]?.id || ''}/${last?.id || ''}/${last && this.s.now() - last.at <= 120000 ? 'recent' : 'old'}`;
       const prior = this.s.get('SELECT * FROM secretary_state WHERE person_id=?', p.id);
       if (!prior || prior.input_key !== key) {
-        const d = this.interpreter.evaluate(samples, this.s.now()), body = JSON.stringify(d);
+        const d = this.interpreter.evaluate(samples, this.s.now(), this.s.lang()), body = JSON.stringify(d);
         this.s.run('INSERT INTO secretary_state VALUES(?,?,?) ON CONFLICT(person_id) DO UPDATE SET input_key=excluded.input_key,decision_json=excluded.decision_json', p.id, key, body);
         this.s.run('INSERT INTO secretary_decisions(person_id,at,decision_json) VALUES(?,?,?)', p.id, this.s.now(), body);
       }
@@ -120,7 +120,7 @@ export class Secretary {
       for (const run of this.s.all("SELECT * FROM care_runs WHERE person_id=? AND state IN ('waiting','observing','question_pending','deferred')", p.id)) this.s.flow.finish(run, 'cancelled', '外出變化優先確認，日常報安提問已讓位');
       this.s.run("UPDATE reminders SET result='cancelled',completed_at=? WHERE person_id=? AND result='pending'", this.s.now(), p.id);
       this.s.run("UPDATE questions SET status='cancelled' WHERE person_id=? AND status='open'", p.id);
-      const q = this.s.ask(p.id, d.source === 'meta' ? metaOutingQuestion(d.title) : outingQuestion(), Math.min(5, plan.responseMinutes) * minute);
+      const q = this.s.ask(p.id, d.source === 'meta' ? metaOutingQuestion(d.title, this.s.lang()) : outingQuestion(this.s.lang()), Math.min(5, plan.responseMinutes) * minute);
       const caseId = randomUUID(), reason = '外出線索出現變化，已主動問一題，等待本人釐清';
       this.s.run('INSERT INTO secretary_cases VALUES(?,?,?,?,?,?,?,?)', caseId, p.id, this.s.now(), q.expiresAt, q.id, 'question_pending', reason, JSON.stringify(d));
       this.s.run('INSERT INTO reminders(id,person_id,created_at,expires,question_id) VALUES(?,?,?,?,?)', randomUUID(), p.id, this.s.now(), q.expiresAt, q.id);

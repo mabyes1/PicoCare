@@ -22,6 +22,7 @@ class CareConnectionService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var stopped = false
     private var locationListening = false
+    private fun t(en: String, zh: String) = AppLang.t(this, en, zh)
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) { /* LocationManager keeps the fix; the evidence reader samples its original timestamp. */ }
         @Suppress("OVERRIDE_DEPRECATION") override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) { }
@@ -32,7 +33,7 @@ class CareConnectionService : Service() {
         override fun run() {
             if (stopped) return
             CareRuntime.executor.execute {
-                val result = try { CareRuntime.sync(this@CareConnectionService) } catch (error: Exception) { "等待重連：${error.message ?: "網路暫時中斷"}" }
+                val result = try { CareRuntime.sync(this@CareConnectionService) } catch (error: Exception) { t("Waiting to reconnect: ${error.message ?: "network hiccup"}", "等待重連：${error.message ?: "網路暫時中斷"}") }
                 CareConfig(this@CareConnectionService).prefs.edit().putString("connection_message", result).apply()
                 if (!stopped) handler.postDelayed(this, 30000)
             }
@@ -45,8 +46,8 @@ class CareConnectionService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, CareConnectionService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
         val notification = Notification.Builder(this, "care_connection").setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setContentTitle("PicoCare 持續關懷中").setContentText("每 30 秒嘗試更新情境，可隨時停止")
-            .setContentIntent(open).setOngoing(true).addAction(Notification.Action.Builder(null, "停止連線", stop).build()).build()
+            .setContentTitle(t("PicoCare is watching over you", "PicoCare 持續關懷中")).setContentText(t("Checks in every 30 seconds. Stop anytime.", "每 30 秒嘗試更新情境，可隨時停止"))
+            .setContentIntent(open).setOngoing(true).addAction(Notification.Action.Builder(null, t("Stop", "停止連線"), stop).build()).build()
         val locationEnabled = CareConfig(this).prefs.getBoolean("location", false) &&
             (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) &&
             getSystemService(LocationManager::class.java).getProviders(true).isNotEmpty()
@@ -60,7 +61,7 @@ class CareConnectionService : Service() {
             for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).filter { it in manager.getProviders(true) }) {
                 manager.requestLocationUpdates(provider, 30000L, 15f, locationListener, Looper.getMainLooper()); locationListening = true
             }
-        } catch (_: SecurityException) { CareConfig(this).prefs.edit().putString("connection_message", "定位權限已變更，其他資料仍可同步").apply() }
+        } catch (_: SecurityException) { CareConfig(this).prefs.edit().putString("connection_message", t("Location permission changed; other data still syncs", "定位權限已變更，其他資料仍可同步")).apply() }
         running = true
         CareConfig(this).prefs.edit().putBoolean("connected", true).apply()
         if (!wasRunning) { handler.removeCallbacks(loop); handler.post(loop) }
@@ -79,8 +80,8 @@ class CareConnectionService : Service() {
             private set
         fun channels(context: Context) {
             val manager = context.getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(NotificationChannel("care_connection", "持續關懷連線", NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
-            manager.createNotificationChannel(NotificationChannel("care_checkin", "報安提醒", NotificationManager.IMPORTANCE_DEFAULT))
+            manager.createNotificationChannel(NotificationChannel("care_connection", AppLang.t(context, "Ongoing care", "持續關懷連線"), NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
+            manager.createNotificationChannel(NotificationChannel("care_checkin", AppLang.t(context, "Check-in reminders", "報安提醒"), NotificationManager.IMPORTANCE_DEFAULT))
         }
         fun showReminder(context: Context, prompt: String? = null): Boolean {
             channels(context)
@@ -89,7 +90,7 @@ class CareConnectionService : Service() {
             if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
             val open = PendingIntent.getActivity(context, 2, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
             manager.notify(2, Notification.Builder(context, "care_checkin").setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("PicoCare 想關心你一下").setContentText(prompt ?: "有一個關心問題，點這裡打開 PicoCare。")
+                .setContentTitle(AppLang.t(context, "PicoCare wants to check in", "PicoCare 想關心你一下")).setContentText(prompt ?: AppLang.t(context, "A question is waiting. Tap to open PicoCare.", "有一個關心問題，點這裡打開 PicoCare。"))
                 .setContentIntent(open).setOnlyAlertOnce(true).setAutoCancel(true).build())
             return true
         }

@@ -2,8 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { canonical, dayAt, demand, object, oneOf, parseEvent, text } from './domain.ts';
+import { canonical, dayAt, demand, object, oneOf, parseEvent, startOfDay, text } from './domain.ts';
 import type { Context, DeviceEvent } from './domain.ts';
+import { envLang, normalizeLang } from './lang.ts';
+import type { Lang } from './lang.ts';
 import { LocalContextProvider, metaIntegration } from './assessment.ts';
 import { ELSE_ID, MAX_ELSE_LENGTH, localQuestion } from './questions.ts';
 import type { QuestionDraft, QuestionOption } from './questions.ts';
@@ -23,6 +25,7 @@ export class CareStore {
   flow: CareWorkflow;
   secretary: Secretary;
   metaElseReviewer: ((args: { personId: string; questionId: string; prompt: string; options: { label: string }[]; elseText: string }) => Promise<ElseReview | null>) | null = null;
+  #lang: Lang | null = null;
   constructor(path: string, now: () => number = Date.now) {
     this.now = now;
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -48,6 +51,7 @@ export class CareStore {
       CREATE INDEX IF NOT EXISTS people_workspace ON people(workspace_id);
       CREATE INDEX IF NOT EXISTS events_person_time ON events(person_id,received_at);
       CREATE TABLE IF NOT EXISTS self_enrollments(request_id TEXT PRIMARY KEY,person_id TEXT NOT NULL REFERENCES people(id),display_name TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     `);
     if (!this.all('PRAGMA table_info(reminders)').some(c => c.name === 'question_id')) this.db.exec('ALTER TABLE reminders ADD COLUMN question_id TEXT');
     if (!this.all('PRAGMA table_info(questions)').some(c => c.name === 'topic')) this.db.exec("ALTER TABLE questions ADD COLUMN topic TEXT NOT NULL DEFAULT 'checkin'");
@@ -65,6 +69,35 @@ export class CareStore {
   }
   close(): void { this.secretary.model?.close(); this.db.close(); }
   metaStatus(): MetaIntegration { return this.secretary.model?.status() || metaIntegration; }
+  lang(): Lang {
+    if (this.#lang === null) {
+      const row = this.get('SELECT value FROM settings WHERE key=?', 'lang');
+      this.#lang = row ? normalizeLang(row.value) : envLang();
+    }
+    return this.#lang;
+  }
+  setLang(lang: Lang): Lang {
+    this.run('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', 'lang', lang);
+    this.#lang = lang;
+    return lang;
+  }
+  // Regenerate deterministic content in the new language from the same
+  // evidence (same facts, new shells); the weekly review re-runs via model.
+  backfillLang(lang: Lang): void {
+    for (const p of this.all('SELECT id FROM people WHERE demo=0')) {
+      const tz = this.get('SELECT w.timezone AS tz FROM people p JOIN workspaces w ON w.id=p.workspace_id WHERE p.id=?', p.id)?.tz || 'Asia/Taipei';
+      const ats = this.all('SELECT at FROM secretary_notes WHERE person_id=? ORDER BY at', p.id).map(r => r.at as number);
+      const days = [...new Set(ats.map(at => dayAt(at, tz)))];
+      if (days.length === 0) days.push(dayAt(this.now(), tz));
+      for (const day of days.slice(-7)) {
+        const at = ats.find(a => dayAt(a, tz) === day) || this.now();
+        this.secretary.notes.tickDay(p.id, startOfDay(at, tz), lang);
+      }
+      this.run('DELETE FROM secretary_state WHERE person_id=?', p.id);
+    }
+    this.secretary.tick();
+    void this.secretary.model?.weeklyTick().catch(() => undefined);
+  }
   createWorkspace(value: unknown): { identity: Identity; session: string } {
     const b = object(value), label = text(b.label, '空間名稱', 60), caregiverName = text(b.caregiverName, '照顧者名稱', 40);
     const kind = oneOf(b.kind, ['personal', 'institution'], '使用方式');
@@ -258,7 +291,7 @@ export class CareStore {
   }
   projection(person: Row, timezone: string) {
     const now = this.now(), context: Context | null = person.context_json ? JSON.parse(person.context_json) : null;
-    let assessment = this.provider.assess(context, person.context_at, now);
+    let assessment = this.provider.assess(context, person.context_at, now, this.lang());
     const secretary = this.secretary.view(person.id), d = secretary.decision;
     if ((d.source === 'meta' || d.action !== 'none') && d.validUntil > now) assessment = { ...assessment, source: d.source === 'meta' ? 'meta' : 'rules', meta: this.metaStatus().status, title: d.title, explanation: d.reason,
       evidence: [...d.evidence.map(e => ({ label: e.label, observedAt: e.observedAt })), ...assessment.evidence], gaps: d.gaps,
@@ -295,7 +328,7 @@ export class CareStore {
     if (existing) return { id: existing.id, status: 'pending', duplicate: true };
     return this.transaction(() => {
       const reminderId = id();
-      const q = this.ask(personId, localQuestion(p.context_json ? JSON.parse(p.context_json) : null, p.context_at, this.now()));
+      const q = this.ask(personId, localQuestion(p.context_json ? JSON.parse(p.context_json) : null, p.context_at, this.now(), this.lang()));
       this.run('INSERT INTO reminders(id,person_id,created_at,expires,question_id) VALUES(?,?,?,?,?)', reminderId, personId, this.now(), q.expiresAt, q.id);
       return { id: reminderId, status: 'pending', duplicate: false };
     });
@@ -327,7 +360,7 @@ export class CareStore {
     const pending = this.all("SELECT id,created_at,expires FROM reminders WHERE person_id=? AND result='pending' AND expires>? ORDER BY created_at", person.id, this.now());
     const openQuestion = this.get("SELECT * FROM questions WHERE person_id=? AND status='open' AND expires>? ORDER BY created_at DESC LIMIT 1", person.id, this.now());
     return { personName: person.name, checkin: projection.checkin, helpOpen: projection.helpOpen, lastCheckin: person.last_checkin,
-      lastSeen: person.last_seen, meta: this.metaStatus(), serverAt: this.now(), enrollmentMode: person.enrollment_mode,
+      lastSeen: person.last_seen, meta: this.metaStatus(), serverAt: this.now(), enrollmentMode: person.enrollment_mode, lang: this.lang(),
       caregiverConnected: person.enrollment_mode !== 'self',
       assessment: projection.assessment, secretary: projection.secretary, observedAt: person.context_at, plan: this.flow.plan(person.id),
       question: openQuestion ? this.questionView(openQuestion) : null,

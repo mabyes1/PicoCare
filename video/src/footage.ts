@@ -1,14 +1,14 @@
-// Real-device footage manifest. Flip a flag when the file lands in video/public/,
-// then re-render. Until then the shot uses the PC reconstruction.
+// Real-device stills manifest. Captured 2026-10-30 from the frozen build
+// (tw.picocare.meta + tw.picocare.meta.care, Ken's live data).
 export const FOOTAGE = {
-  wall: false, // phone-wall.mp4
-  weekly: false, // phone-weekly.mp4
-  ask: false, // phone-ask.mp4
-  care: false, // phone-care.mp4
+  wall: true,
+  weekly: true,
+  ask: false,
+  care: true,
 };
-export const FOOTAGE_FILE = {
-  wall: 'phone-wall.mp4',
-  weekly: 'phone-weekly.mp4',
-  ask: 'phone-ask.mp4',
-  care: 'phone-care.mp4',
+export const STILLS = {
+  wall: ['phone-insight.png', 'phone-wall.png'],
+  weekly: ['phone-insight.png'],
+  ask: [] as string[],
+  care: ['phone-care-list.png', 'phone-care-detail.png', 'phone-care-actions.png'],
 } as const;

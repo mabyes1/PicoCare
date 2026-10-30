@@ -169,14 +169,17 @@ object UiBits {
         }
     }
 
-    fun timelineLabel(kind: String): String = when (kind) {
-        "context" -> "手機動態"
-        "question_answer" -> "回答問題"
-        "checkin" -> "本人報安"
-        "help" -> "需要協助"
-        "pairing" -> "手機配對"
-        "plan" -> "關心設定"
-        else -> kind
+    fun timelineLabel(kind: String, lang: String = "en"): String {
+        val zh = lang == "zh"
+        return when (kind) {
+            "context" -> if (zh) "手機動態" else "Phone activity"
+            "question_answer" -> if (zh) "回答問題" else "Answered"
+            "checkin" -> if (zh) "本人報安" else "Check-in"
+            "help" -> if (zh) "需要協助" else "Asked for help"
+            "pairing" -> if (zh) "手機配對" else "Pairing"
+            "plan" -> if (zh) "關心設定" else "Care plan"
+            else -> kind
+        }
     }
 
     class WrapLayout(context: Context, private val hSpacing: Int, private val vSpacing: Int) : ViewGroup(context) {

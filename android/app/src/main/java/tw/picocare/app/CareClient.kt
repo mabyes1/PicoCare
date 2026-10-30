@@ -18,11 +18,13 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 class CareConfig(context: Context) {
-    val prefs = context.getSharedPreferences("picocare_meta_v1", Context.MODE_PRIVATE)
+    private val app = context.applicationContext
+    val prefs = app.getSharedPreferences("picocare_meta_v1", Context.MODE_PRIVATE)
+    private fun t(en: String, zh: String) = AppLang.t(app, en, zh)
     var endpoint: String
         get() = prefs.getString("endpoint", "http://127.0.0.1:4317")!!
-        set(value) { check(prefs.edit().putString("endpoint", validateEndpoint(value)).commit()) { "服務網址儲存失敗" } }
-    val personName: String get() = prefs.getString("person_name", "尚未配對")!!
+        set(value) { check(prefs.edit().putString("endpoint", validateEndpoint(value, AppLang.get(app))).commit()) { t("Could not save the service URL", "服務網址儲存失敗") } }
+    val personName: String get() = prefs.getString("person_name", t("Not paired yet", "尚未配對"))!!
     val paired: Boolean get() = prefs.contains("token")
     val selfMode: Boolean get() = prefs.getBoolean("self_mode", false)
     val ready: Boolean get() = paired || selfMode
@@ -30,7 +32,7 @@ class CareConfig(context: Context) {
         get() = prefs.getBoolean("debug_mode", false)
         set(value) { prefs.edit().putBoolean("debug_mode", value).apply() }
     fun beginSelf(name: String) {
-        require(!paired && name.trim().isNotEmpty() && name.length <= 40) { "請先輸入自己的稱呼" }
+        require(!paired && name.trim().isNotEmpty() && name.length <= 40) { t("Please enter your name first", "請先輸入自己的稱呼") }
         val request = prefs.getString("self_request", null) ?: UUID.randomUUID().toString()
         check(prefs.edit().putBoolean("self_mode", true).putString("self_request", request).putString("person_name", name.trim()).commit())
     }
@@ -44,7 +46,7 @@ class CareConfig(context: Context) {
     }
     fun token(): String {
         val bytes = Base64.decode(prefs.getString("token", ""), Base64.NO_WRAP)
-        require(bytes.size > 12) { "手機配對憑證需要重新設定" }
+        require(bytes.size > 12) { t("The pairing credential needs a reset", "手機配對憑證需要重新設定") }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
         return String(cipher.doFinal(bytes.copyOfRange(12, bytes.size)), Charsets.UTF_8)
@@ -54,20 +56,22 @@ class CareConfig(context: Context) {
         val encrypted = cipher.iv + cipher.doFinal(response.getString("deviceToken").toByteArray(Charsets.UTF_8))
         check(prefs.edit().putString("token", Base64.encodeToString(encrypted, Base64.NO_WRAP))
             .putString("person_name", response.getString("personName")).putString("workspace", response.getString("workspaceLabel"))
-            .remove("enrollment_request").remove("enrollment_code").commit()) { "配對資料儲存失敗" }
+            .remove("enrollment_request").remove("enrollment_code").commit()) { t("Could not save the pairing", "配對資料儲存失敗") }
     }
     companion object {
-        fun validateEndpoint(raw: String): String {
+        fun validateEndpoint(raw: String, lang: String = "en"): String {
+            val z = lang == "zh"
             val value = raw.trim().trimEnd('/'); val uri = URI(value)
-            require(uri.host != null && uri.userInfo == null && uri.query == null && uri.fragment == null && (uri.path.isNullOrEmpty() || uri.path == "/")) { "請輸入服務根網址" }
-            require(uri.scheme == "https" || uri.scheme == "http" && uri.host in listOf("127.0.0.1", "localhost")) { "請使用 HTTPS；本機開發可使用 127.0.0.1" }
+            require(uri.host != null && uri.userInfo == null && uri.query == null && uri.fragment == null && (uri.path.isNullOrEmpty() || uri.path == "/")) { if (z) "請輸入服務根網址" else "Please enter the service root URL" }
+            require(uri.scheme == "https" || uri.scheme == "http" && uri.host in listOf("127.0.0.1", "localhost")) { if (z) "請使用 HTTPS；本機開發可使用 127.0.0.1" else "Please use HTTPS (127.0.0.1 is fine for local dev)" }
             return value
         }
     }
 }
 
 class ApiFailure(val status: Int, message: String) : Exception(message)
-class CareApi(private val config: CareConfig) {
+class CareApi(private val config: CareConfig, private val context: Context? = null) {
+    private fun t(en: String, zh: String): String = context?.let { AppLang.t(it, en, zh) } ?: en
     fun call(path: String, body: JSONObject? = null, authenticated: Boolean = true): JSONObject {
         val connection = URI(config.endpoint + path).toURL().openConnection() as HttpURLConnection
         connection.connectTimeout = 8000; connection.readTimeout = 8000; connection.instanceFollowRedirects = false
@@ -83,13 +87,15 @@ class CareApi(private val config: CareConfig) {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val raw = stream?.bufferedReader()?.use { it.readText().take(65536) } ?: "{}"
             val result = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
-            if (status !in 200..299) throw ApiFailure(status, result.optString("error", "服務回應 $status"))
+            if (status !in 200..299) throw ApiFailure(status, result.optString("error", t("Service replied $status", "服務回應 $status")))
             return result
         } finally { connection.disconnect() }
     }
 }
 
 class Outbox(context: Context, private val clock: () -> Long = System::currentTimeMillis) : SQLiteOpenHelper(context, "picocare_meta_outbox.sqlite", null, 3) {
+    private val app = context.applicationContext
+    private fun t(en: String, zh: String) = AppLang.t(app, en, zh)
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE events(id TEXT PRIMARY KEY,body TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',error TEXT)")
         createQuestionReceipts(db)
@@ -117,8 +123,9 @@ class Outbox(context: Context, private val clock: () -> Long = System::currentTi
             db.execSQL("INSERT INTO evidence(event_id,observed_at,recorded_at,kind,body,delivery) VALUES(?,?,?,?,?,'pending')", arrayOf(event.getString("eventId"), event.getLong("observedAt"), clock(), event.getString("kind"), event.toString()))
             // Retain seven days locally. Pending user replies/help are never removed by retention.
             val cutoff = clock() - 7L * 86400000
-            db.execSQL("UPDATE events SET state='failed',error='觀測已超過服務接收的七日範圍' WHERE state='pending' AND id IN(SELECT event_id FROM evidence WHERE kind='context' AND observed_at<?)", arrayOf(cutoff))
-            db.execSQL("UPDATE evidence SET delivery='failed',error='觀測已超過服務接收的七日範圍' WHERE kind='context' AND observed_at<? AND delivery='pending'", arrayOf(cutoff))
+            val expired = t("This sample is older than the 7-day window", "觀測已超過服務接收的七日範圍")
+            db.execSQL("UPDATE events SET state='failed',error=? WHERE state='pending' AND id IN(SELECT event_id FROM evidence WHERE kind='context' AND observed_at<?)", arrayOf(expired, cutoff))
+            db.execSQL("UPDATE evidence SET delivery='failed',error=? WHERE kind='context' AND observed_at<? AND delivery='pending'", arrayOf(expired, cutoff))
             db.execSQL("DELETE FROM events WHERE id IN(SELECT event_id FROM evidence WHERE kind='context' AND observed_at<? AND delivery='failed')", arrayOf(cutoff))
             db.execSQL("DELETE FROM evidence WHERE observed_at<? AND (delivery='sent' OR kind='context')", arrayOf(cutoff))
             db.setTransactionSuccessful()
@@ -180,25 +187,27 @@ object CareRuntime {
     private var queue: Outbox? = null
     @Synchronized fun outbox(context: Context): Outbox = queue ?: Outbox(context.applicationContext).also { queue = it }
     fun event(kind: String): JSONObject = JSONObject().put("eventId", UUID.randomUUID().toString()).put("kind", kind).put("observedAt", System.currentTimeMillis())
-    private fun send(api: CareApi, outbox: Outbox, id: String, event: JSONObject) {
+    private fun send(api: CareApi, outbox: Outbox, id: String, event: JSONObject, context: Context) {
         val receipt = api.call("/api/device/events", event)
-        check(receipt.optString("eventId") == id && receipt.optString("status") == "recorded" && receipt.optString("receiptId").isNotEmpty() && receipt.optLong("receivedAt", 0) > 0) { "中心回執不完整，資料保留等待重送" }
+        check(receipt.optString("eventId") == id && receipt.optString("status") == "recorded" && receipt.optString("receiptId").isNotEmpty() && receipt.optLong("receivedAt", 0) > 0) { AppLang.t(context, "Hub receipt incomplete; keeping data for resend", "中心回執不完整，資料保留等待重送") }
         outbox.remove(id, receipt.getLong("receivedAt"))
     }
     fun sync(context: Context, collect: Boolean = true): String {
-        val config = CareConfig(context); if (!config.ready) return "先開始使用自己的秘書，或完成手機配對"
-        val outbox = outbox(context); val api = CareApi(config)
+        val app = context.applicationContext
+        fun t(en: String, zh: String) = AppLang.t(app, en, zh)
+        val config = CareConfig(app); if (!config.ready) return t("Start your own secretary or finish pairing first", "先開始使用自己的秘書，或完成手機配對")
+        val outbox = outbox(app); val api = CareApi(config, app)
         if (collect) {
-            val snapshot = DeviceContextReader.read(context)
+            val snapshot = DeviceContextReader.read(app)
             val e = event("context").put("context", snapshot)
             outbox.add(e)
             config.prefs.edit().putString("last_local_context", snapshot.toString()).putLong("last_local_at", e.getLong("observedAt")).apply()
         }
         if (!config.paired && config.selfMode) config.savePairing(api.call("/api/device/self-enroll", JSONObject().put("displayName", config.personName).put("requestId", config.prefs.getString("self_request", "")), false))
         for ((id, event) in outbox.pending()) {
-            try { send(api, outbox, id, event) }
+            try { send(api, outbox, id, event, app) }
             catch (error: ApiFailure) {
-                if (error.status in listOf(400, 404, 409, 413, 415)) outbox.fail(id, error.message ?: "資料需要檢查") else throw error
+                if (error.status in listOf(400, 404, 409, 413, 415)) outbox.fail(id, error.message ?: t("This entry needs a look", "資料需要檢查")) else throw error
             }
         }
         val status = api.call("/api/device/status")
@@ -210,15 +219,15 @@ object CareRuntime {
             if (id in executed || reminder.getLong("expiresAt") <= System.currentTimeMillis()) continue
             val eventId = "reminder_$id"
             if (outbox.containsEvidence(eventId)) continue
-            val shown = CareConnectionService.showReminder(context, status.optJSONObject("question")?.optString("prompt"))
+            val shown = CareConnectionService.showReminder(app, status.optJSONObject("question")?.optString("prompt"))
             outbox.add(event("reminder_result").put("eventId", eventId).put("reminderId", id).put("result", if (shown) "executed" else "declined"))
             executed.add(id)
             check(config.prefs.edit().putStringSet("executed_reminders", executed.toList().takeLast(100).toSet()).commit())
         }
         for ((id, event) in outbox.pending()) {
-            try { send(api, outbox, id, event) }
-            catch (error: ApiFailure) { if (error.status in listOf(400, 404, 409)) outbox.fail(id, error.message ?: "回條需要檢查") else throw error }
+            try { send(api, outbox, id, event, app) }
+            catch (error: ApiFailure) { if (error.status in listOf(400, 404, 409)) outbox.fail(id, error.message ?: t("This receipt needs a look", "回條需要檢查")) else throw error }
         }
-        return if (outbox.count("failed") > 0) "連線成功；${outbox.count("failed")} 筆資料需要檢查" else "已同步，中心已收到資料"
+        return if (outbox.count("failed") > 0) t("Connected; ${outbox.count("failed")} entries need a look", "連線成功；${outbox.count("failed")} 筆資料需要檢查") else t("Synced; the hub has your data", "已同步，中心已收到資料")
     }
 }

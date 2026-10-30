@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
 import { CareStore } from './store.ts';
-import { demand, Problem } from './domain.ts';
+import { demand, object, Problem } from './domain.ts';
+import { isLang } from './lang.ts';
+import type { Lang } from './lang.ts';
 import { metaConfig } from './meta-api.ts';
 import { MetaSecretary } from './meta-secretary.ts';
 
@@ -42,6 +44,15 @@ export function makeServer(store: CareStore, options: { allowDemo?: boolean; sch
         if (method === 'GET' && path === '/api/device/status') return json(res, 200, store.deviceStatus(bearer(req)));
         if (method === 'POST' && path === '/api/device/plan') return json(res, 200, store.selfPlan(bearer(req), await body(req)));
         throw new Problem(404, '找不到這個手機 API');
+      }
+      if ((method === 'GET' || method === 'POST') && path === '/api/lang') {
+        try { store.identity(cookie(req)); } catch { store.device(bearer(req)); }
+        if (method === 'GET') return json(res, 200, { lang: store.lang() });
+        const v = object(await body(req));
+        demand(isLang(v.lang), 'lang must be en or zh');
+        const lang = v.lang as Lang;
+        if (lang !== store.lang()) { store.setLang(lang); store.backfillLang(lang); }
+        return json(res, 200, { lang: store.lang() });
       }
       if (path.startsWith('/api/')) {
         const identity = store.identity(cookie(req));

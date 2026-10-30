@@ -2,8 +2,8 @@ import { AbsoluteFill, Audio, Sequence, staticFile } from 'remotion';
 import React from 'react';
 import { FONT } from './cards';
 import { VO } from './captions';
-import { CaptionBottom, EndCard, KenBurns, KineticLines, Shot } from './film';
-import { WallScreen } from './phone';
+import { CaptionBottom, EndCard, KenBurns, KineticLines, Shot, StillsDevice } from './film';
+import { STILLS } from './footage';
 
 // Vertical X cut, 1080x1920 @30fps, 40s = 1200 frames.
 // Hook → proof → promise, with the same voice.
@@ -20,7 +20,9 @@ export const Vertical: React.FC = () => {
       </Sequence>
       <Sequence from={228} durationInFrames={612}>
         <Shot dur={612}>
-          <WallScreen scale={1.45} shiftY={-60} />
+          <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+            <StillsDevice stills={STILLS.wall} dur={612} scale={1.55} shiftY={-40} />
+          </AbsoluteFill>
           <CaptionBottom seg={2} voLocal={42} />
         </Shot>
       </Sequence>

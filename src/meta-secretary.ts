@@ -1,5 +1,6 @@
 import type { CareStore } from './store.ts';
 import type { ContextDecision, MetaIntegration } from '../shared/protocol.ts';
+import type { Lang } from './lang.ts';
 import { dayAt } from './domain.ts';
 import { MetaApi, MetaApiError, basetenBaseUrl, metaInput } from './meta-api.ts';
 import type { MetaConfig } from './meta-api.ts';
@@ -24,7 +25,11 @@ export class MetaSecretary {
     store.db.exec(`CREATE TABLE IF NOT EXISTS meta_decisions(person_id TEXT PRIMARY KEY REFERENCES people(id),signature TEXT NOT NULL,decision_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS meta_requests(id INTEGER PRIMARY KEY AUTOINCREMENT,person_id TEXT NOT NULL REFERENCES people(id),at INTEGER NOT NULL,model TEXT NOT NULL,status TEXT NOT NULL,error_code TEXT,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,kind TEXT,state_key TEXT);
       CREATE INDEX IF NOT EXISTS meta_requests_time ON meta_requests(at);
-      CREATE TABLE IF NOT EXISTS secretary_weekly(person_id TEXT PRIMARY KEY REFERENCES people(id),at INTEGER NOT NULL,text TEXT NOT NULL,model TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS secretary_weekly(person_id TEXT NOT NULL REFERENCES people(id),lang TEXT NOT NULL DEFAULT 'zh',at INTEGER NOT NULL,text TEXT NOT NULL,model TEXT NOT NULL,UNIQUE(person_id,lang));`);
+    if (!storeHasColumn(store, 'secretary_weekly', 'lang')) store.db.exec(`CREATE TABLE secretary_weekly_new(person_id TEXT NOT NULL REFERENCES people(id),lang TEXT NOT NULL DEFAULT 'zh',at INTEGER NOT NULL,text TEXT NOT NULL,model TEXT NOT NULL,UNIQUE(person_id,lang));
+      INSERT INTO secretary_weekly_new(person_id,lang,at,text,model) SELECT person_id,'zh',at,text,model FROM secretary_weekly;
+      DROP TABLE secretary_weekly;
+      ALTER TABLE secretary_weekly_new RENAME TO secretary_weekly;`);
     if (!storeHasColumn(store, 'meta_requests', 'kind')) store.db.exec('ALTER TABLE meta_requests ADD COLUMN kind TEXT');
     if (!storeHasColumn(store, 'meta_requests', 'state_key')) store.db.exec('ALTER TABLE meta_requests ADD COLUMN state_key TEXT');
     if (config.openModel) store.run("UPDATE meta_requests SET kind='weekly' WHERE kind IS NULL AND model=?", config.openModel);
@@ -42,14 +47,15 @@ export class MetaSecretary {
       requestsToday: used, dailyLimit: c.dailyLimit, lastSuccessAt: this.#lastSuccessAt, lastError: this.#lastError,
       lastSkipAt: this.#lastSkipAt, lastSkipReason: this.#lastSkipReason };
   }
-  weekly(personId: string): { text: string; at: number; model: string } | null {
-    const row = this.#store.get('SELECT * FROM secretary_weekly WHERE person_id=?', personId);
+  weekly(personId: string, lang?: Lang): { text: string; at: number; model: string } | null {
+    const useLang = lang || this.#store.lang();
+    const row = this.#store.get('SELECT * FROM secretary_weekly WHERE person_id=? AND lang=?', personId, useLang);
     return row ? { text: row.text, at: row.at, model: row.model } : null;
   }
-  weeklyInput(personId: string) {
-    const s = this.#store, since = s.now() - 7 * 86400000;
+  weeklyInput(personId: string, lang?: Lang) {
+    const s = this.#store, since = s.now() - 7 * 86400000, useLang = lang || s.lang();
     const tz = s.get('SELECT w.timezone AS tz FROM people p JOIN workspaces w ON w.id=p.workspace_id WHERE p.id=?', personId)?.tz || 'Asia/Taipei';
-    const notes = s.all('SELECT * FROM secretary_notes WHERE person_id=? AND at>=? ORDER BY at ASC LIMIT 20', personId, since)
+    const notes = s.all('SELECT * FROM secretary_notes WHERE person_id=? AND lang=? AND at>=? ORDER BY at ASC LIMIT 20', personId, useLang, since)
       .map(r => ({ day: dayAt(r.at, tz), title: String(r.title).slice(0, 60), body: String(r.body).slice(0, 200) }));
     if (notes.length < 3) return null;
     const answers = s.all("SELECT topic,answer_json FROM questions WHERE person_id=? AND status='answered' AND answer_json IS NOT NULL ORDER BY created_at DESC LIMIT 10", personId)
@@ -63,23 +69,24 @@ export class MetaSecretary {
     const s = this.#store, c = this.#config, via = this.#openApi || this.#api, model = this.#openApi ? c.openModel : c.model;
     if (this.#busy || this.#stopped || this.#blocked || !c.enabled || (!c.key && !this.#openApi)) return;
     if (!this.#openApi && this.requestsToday() >= c.dailyLimit) return;
+    const lang = s.lang();
     for (const p of s.all('SELECT id FROM people WHERE demo=0')) {
-      const prior = s.get('SELECT at FROM secretary_weekly WHERE person_id=?', p.id);
+      const prior = s.get('SELECT at FROM secretary_weekly WHERE person_id=? AND lang=?', p.id, lang);
       if (prior && s.now() - prior.at < 7 * 86400000) continue;
       const req = s.get("SELECT at,error_code FROM meta_requests WHERE person_id=? AND kind='weekly' ORDER BY id DESC LIMIT 1", p.id);
       const cooldown = req?.error_code ? Math.max(300000, c.intervalMs) : c.intervalMs;
       if (req && s.now() - req.at < cooldown) continue;
-      const input = this.weeklyInput(p.id);
+      const input = this.weeklyInput(p.id, lang);
       if (!input) continue;
       this.#busy = true;
       s.run("INSERT INTO meta_requests(person_id,at,model,status,kind) VALUES(?,?,?,'pending','weekly')", p.id, s.now(), model);
       this.#requestId = Number(s.get('SELECT last_insert_rowid() AS id')!.id);
       try {
-        const result = await via.weeklyReview(input, this.#abort.signal);
+        const result = await via.weeklyReview(input, this.#abort.signal, lang);
         if (this.#stopped) return;
         s.transaction(() => {
           s.run('UPDATE meta_requests SET status=?,input_tokens=?,output_tokens=? WHERE id=?', 'accepted', result.inputTokens, result.outputTokens, this.#requestId!);
-          s.run('INSERT INTO secretary_weekly VALUES(?,?,?,?) ON CONFLICT(person_id) DO UPDATE SET at=excluded.at,text=excluded.text,model=excluded.model', p.id, s.now(), result.text, model);
+          s.run('INSERT INTO secretary_weekly(person_id,lang,at,text,model) VALUES(?,?,?,?,?) ON CONFLICT(person_id,lang) DO UPDATE SET at=excluded.at,text=excluded.text,model=excluded.model', p.id, lang, s.now(), result.text, model);
         });
         this.#lastError = null; this.#lastSuccessAt = s.now();
       } catch (error) {
@@ -136,7 +143,7 @@ export class MetaSecretary {
       const prior = s.get("SELECT at,error_code,state_key FROM meta_requests WHERE person_id=? AND (kind IS NULL OR kind='infer') ORDER BY id DESC LIMIT 1", p.id);
       const cooldown = prior?.error_code ? Math.max(300000, c.intervalMs) : c.intervalMs;
       if (!priority && prior && s.now() - prior.at < cooldown) { this.#lastSkipAt = s.now(); this.#lastSkipReason = 'interval'; continue; }
-      const samples = s.secretary.samples(p.id), local = s.secretary.interpreter.evaluate(samples, s.now());
+      const samples = s.secretary.samples(p.id), local = s.secretary.interpreter.evaluate(samples, s.now(), s.lang());
       const input = metaInput(samples, s.now(), local, c.notificationText);
       if (!input) continue;
       // Batch judgment: unchanged evidence gets no new call, even past the
@@ -149,10 +156,10 @@ export class MetaSecretary {
       s.run("INSERT INTO meta_requests(person_id,at,model,status,kind,state_key) VALUES(?,?,?,'pending','infer',?)", p.id, s.now(), c.model, input.stateKey);
       this.#requestId = Number(s.get('SELECT last_insert_rowid() AS id')!.id);
       try {
-        const result = await this.#api.infer(input, s.now(), this.#abort.signal);
+        const result = await this.#api.infer(input, s.now(), this.#abort.signal, s.lang());
         if (this.#stopped) return;
         const currentSamples = s.secretary.samples(p.id);
-        const latest = metaInput(currentSamples, s.now(), s.secretary.interpreter.evaluate(currentSamples, s.now()), c.notificationText);
+        const latest = metaInput(currentSamples, s.now(), s.secretary.interpreter.evaluate(currentSamples, s.now(), s.lang()), c.notificationText);
         const usable = latest?.signature === input.signature && result.decision.validUntil > s.now();
         result.decision.at = s.now();
         s.transaction(() => {
@@ -181,7 +188,7 @@ export class MetaSecretary {
     s.run("INSERT INTO meta_requests(person_id,at,model,status,kind) VALUES(?,?,?,'pending','else')", args.personId, s.now(), c.model);
     this.#requestId = Number(s.get('SELECT last_insert_rowid() AS id')!.id);
     try {
-      const result = await this.#api.reviewElse({ prompt: args.prompt, options: args.options, elseText: args.elseText }, this.#abort.signal);
+      const result = await this.#api.reviewElse({ prompt: args.prompt, options: args.options, elseText: args.elseText }, this.#abort.signal, s.lang());
       if (this.#stopped) return null;
       s.run('UPDATE meta_requests SET status=?,input_tokens=?,output_tokens=? WHERE id=?', 'accepted', result.inputTokens, result.outputTokens, this.#requestId!);
       this.#lastError = null; this.#lastSuccessAt = s.now();
