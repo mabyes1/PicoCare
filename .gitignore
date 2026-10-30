@@ -29,3 +29,12 @@ video/public/*.mp4
 video/public/*.MP4
 
 *.mp4
+
+# Internal agent & owner runbooks (kept locally, excluded from public repo)
+AGENTS.md
+HANDOFF.md
+docs/submission.md
+docs/deploy.md
+docs/x-post.md
+video/public/README.md
+video/vo-brief-en.md

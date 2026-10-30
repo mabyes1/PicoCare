@@ -9,7 +9,7 @@ $staging = Join-Path $projectRoot '.local/package-staging'
 try {
     if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
-    $sourceFiles = @('AGENTS.md','HANDOFF.md','META.md','README.md','PRODUCT.md','SECRETARY.md','FIELD.md','package.json','.env.example','.npmrc','.gitignore','tsconfig.json','tsconfig.web.json','src','shared','web','tests','scripts')
+    $sourceFiles = @('META.md','README.md','README_ZH.md','PRODUCT.md','SECRETARY.md','FIELD.md','package.json','.env.example','.npmrc','.gitignore','tsconfig.json','tsconfig.web.json','src','shared','web','tests','scripts')
     foreach ($source in $sourceFiles) { Copy-Item -LiteralPath (Join-Path $projectRoot $source) -Destination $staging -Recurse }
     $androidStage = Join-Path $staging 'android'
     New-Item -ItemType Directory -Path (Join-Path $androidStage 'app') -Force | Out-Null

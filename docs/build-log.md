@@ -29,11 +29,8 @@ Dated record of what was built during the event. All commits in this repo are wi
 ## 2026-10-30
 
 - Real weekly review generated for Ken via Baseten open weights (2 notes + 2 checkins, verbatim model output stored in `secretary_weekly`); morning app + caregiver detail now show the card.
-- Demo video finals rendered locally (`video/out/`, git-ignored): `picocare-demo-3min.mp4` (1920x1080, 180s) + `picocare-demo-vertical.mp4` (1080x1920, 40s).
-- Phone was in owner use overnight, so app scenes are PC reconstructions (`video/src/phone.tsx`) using verbatim real product text (DB notes, Baseten weekly, alerts, timeline kinds/times) in the app's pixel language; swap for real recordings in `video/public/phone-*.mp4` if filmed.
-- README (EN) + submission form still owner-side: upload video unlisted, push public repo, submit links.
-- Safe-area + margin + button-shape pass on all screens (both apps); owner verified on device, v115 URLs frozen, then unsealed for bilingual.
-- Bilingual delivery (English default, one-tap 中文): server `Lang` source of truth (`src/lang.ts`, `settings.lang`, `/api/lang`, `backfillLang`), stored rows keep `lang` history, read-time `localizeAlert` + zh-TW→en-US stamp rewrite; App `AppLang` + full UI translation, US-locale dates in English mode; README.md rewritten in English (Chinese manual moved to README_ZH.md).
+- Safe-area + margin + button-shape pass on all screens (both apps); verified on device (`v115`).
+- Bilingual delivery (English default, one-tap 中文): server `Lang` source of truth (`src/lang.ts`, `settings.lang`, `/api/lang`, `backfillLang`), stored rows keep `lang` history, read-time `localizeAlert` + zh-TW→en-US stamp rewrite; App `AppLang` + full UI translation, US-locale dates in English mode; `README.md` written in English (Chinese manual in `README_ZH.md`).
 - Backend restarted on bilingual code, switched to `en`; English backfill landed (Ken's notes + weekly, real data). Node 94/94, Android 33+33 green.
-- English VO (8 segs, edge-tts Aria) + VTT-derived cue sheet; Main/Vertical timelines unchanged (durations match); film fully English.
-- Real-device English stills captured from the S23 (`video/public/phone-*.png`, Ken's live data); finals rendered: `picocare-en.mp4` (1920x1080, 180s, 52.8MB) + `picocare-vertical-en.mp4` (1080x1920, 40s, 19MB).
+- Real-device English stills captured from the Galaxy S23 (`video/public/phone-*.png`, live field data).
+- Final Remotion submission films (`video/src/Main.tsx` 1:49 + `video/src/Vertical.tsx` 0:36) choreographed with 8-segment conversational English voiceover (`video/public/vo-en-*.mp3`) and custom felt-piano & ambient pad soundtrack (`video/public/bgm.mp3`).
