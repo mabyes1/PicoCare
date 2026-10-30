@@ -6,7 +6,7 @@
 
 ![PicoCare — Quiet care across generations](video/public/art-hero.jpg)
 
-**🎬 Demo video (1:49, English, real Galaxy S23 footage): https://www.youtube.com/watch?v=8saCgnKm5GU**
+**🎬 Demo video (1:49, English, real Galaxy S23 screens): https://www.youtube.com/watch?v=8saCgnKm5GU**
 
 ---
 
@@ -30,9 +30,9 @@ It simply keeps a warm, honest thread between the people who love each other mos
 
 ---
 
-## Live From the Field — Real Galaxy S23 Footage
+## Live From the Field — Real Galaxy S23 Screens
 
-Everything below is captured from live field testing on a **Samsung Galaxy S23** running real multi-day telemetry, paired with our **Meta Muse Spark** and **Open-Weight** backend. Every screen is bilingual (**English** by default, one tap to **繁體中文**).
+Every phone screen below is a real screenshot captured during live field testing on a **Samsung Galaxy S23** running real multi-day telemetry, paired with our **Meta Muse Spark** and **Open-Weight** backend. Every screen is bilingual (**English** by default, one tap to **繁體中文**).
 
 ### 1. On the Parent’s Phone (`tw.picocare.meta`)
 
@@ -46,7 +46,7 @@ Everything below is captured from live field testing on a **Samsung Galaxy S23**
 | Peace of Mind at a Glance | Shared Context, Zero Spying | Gentle Human Follow-Up |
 | :---: | :---: | :---: |
 | ![Caregiver List](video/public/phone-care-list.png) | ![Caregiver Detail](video/public/phone-care-detail.png) | ![Caregiver Actions](video/public/phone-care-actions.png) |
-| **Who is fine, who needs a call.**<br/>Supports both 1-on-1 family care and 1-to-many care organizations in one calm priority list. | **The parent’s own words come first.**<br/>See the weekly summary, the secretary’s latest reading, the cited evidence, and what your parent actually replied. | **Close the loop with warmth.**<br/>Log a quick phone call, send a gentle check-in question, or resolve a help request without overwriting history. |
+| **Who is fine, who needs a call.**<br/>Supports both 1-on-1 family care and 1-to-many care organizations in one calm priority list. | **The parent’s own words come first.**<br/>See the weekly summary, the secretary’s latest reading, the cited evidence, and what your parent actually replied. | **Close the loop with warmth.**<br/>Acknowledge an alert, log that you reached your parent, or resolve a help request—without overwriting history. |
 
 ---
 
@@ -60,11 +60,11 @@ Yet an unconstrained LLM is equally dangerous in elder care: left alone, models 
 
 ```mermaid
 flowchart LR
-    A["📱 Android On-Device Senses\n(Screen, Steps, Media, Nav, Battery)"] --> B["🛡️ Deterministic Evidence Gates\n(Thin evidence = Stay silent)"]
-    B --> C["🧠 Meta Muse Spark 1.3\n(Weak-Signal Fusion & ELSE Triage)"]
-    B --> D["🔓 Muse Spark Open 1026\n(7-Day Open-Weight Weekly Letter)"]
-    C --> E["💬 Ask Parent First\n(3 Tap Options + ELSE Box)"]
-    D --> F["❤️ Family & Caregiver UI\n(Verified Provenance & Evidence)"]
+    A["📱 Android On-Device Senses<br/>(Screen, Steps, Media, Nav, Battery)"] --> B["🛡️ Deterministic Evidence Gates<br/>(Thin evidence = Stay silent)"]
+    B --> C["🧠 Meta Muse Spark 1.3<br/>(Weak-Signal Fusion & ELSE Triage)"]
+    B --> D["🔓 Muse Spark Open 1026<br/>(7-Day Open-Weight Weekly Letter)"]
+    C --> E["💬 Ask Parent First<br/>(3 Tap Options + ELSE Box)"]
+    D --> F["❤️ Family & Caregiver UI<br/>(Verified Provenance & Evidence)"]
     E --> F
 ```
 
@@ -79,17 +79,19 @@ flowchart LR
 1. **Zero Raw PII to the Model**: Exact GPS coordinates, app package names, and raw private notification texts are **never** sent to the LLM by default—only aggregated distances, counts, category labels, and timestamps.
 2. **Verified Evidence Citations**: Every `muse-spark-1.3` reading must cite real `evidenceIds` from the current sample window. If a model output cites a non-existent ID, violates JSON schema, or arrives after the phone's state has already changed, it is discarded immediately.
 3. **Two-Signal Minimum for Proactive Check-Ins**: Meta can propose a proactive check-in (`outing/confirm` or `video/wait`), but only when backed by **at least two distinct pieces of evidence**, including at least one fresh observation. Thin evidence means respectful silence.
-4. **Strict Non-Medical Boundary**: Every output from both `muse-spark-1.3` and `muse-spark-open-1026` passes a deterministic medical/diagnostic filter before storage or display. No "does not mean" boilerplate disclaimers, no fabricated alternative guesses, and zero medical advice.
+4. **Strict Non-Medical Boundary**: Every output from both `muse-spark-1.3` and `muse-spark-open-1026` passes a deterministic medical/diagnostic filter before storage or display. Zero medical advice.
 
 ---
 
-## Two Moments Where PicoCare Changes Everything
+## Two Scenarios PicoCare Is Built For
 
-### Moment 1: Lost in an Afternoon Movie *(Preventing False Panic)*
+> *Illustrative scenarios. The numbers in Scenario 2 come from our synthetic replay (`scripts/demo-secretary.ts`, `META.md`), not from a real person.*
+
+### Scenario 1: Lost in an Afternoon Movie *(Preventing False Panic)*
 At 2:00 PM, your father hasn’t tapped his daily check-in. An ordinary check-in app would blast an overdue alarm to your phone while you’re in a meeting.  
 PicoCare’s on-device collector notices continuous foreground media playback and active audio sessions. The secretary recognizes he is simply enjoying a video, quietly postpones the check-in prompt, and logs the observation transparently—letting him finish his movie in peace.
 
-### Moment 2: The Unfamiliar Evening Walk *(Catching Subtle Trouble Early)*
+### Scenario 2: The Unfamiliar Evening Walk *(Catching Subtle Trouble Early)*
 At 5:40 PM, your mother is out walking. Her battery isn't critically low yet (`80%`), so a basic battery alert wouldn't fire. But PicoCare aggregates **`1,779 meters` of movement**, **repeated location revisits**, and **`9` consecutive navigation notifications**.  
 `muse-spark-1.3` fuses those weak signals and gently asks her on her screen first:
 > *"Looks like you're out and moving around — is everything going smoothly?"*

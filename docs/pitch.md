@@ -40,5 +40,5 @@ PicoCare takes a more human path: care should never feel like surveillance, and 
 ## Links (Fill on Submission Day)
 
 - **GitHub Repository**: <https://github.com/mabyes1/PicoCare>
-- **Demo Video (1:49, English VO + BGM, real Galaxy S23 footage)**: https://www.youtube.com/watch?v=8saCgnKm5GU
+- **Demo Video (1:49, English VO + BGM, real Galaxy S23 screens)**: https://www.youtube.com/watch?v=8saCgnKm5GU
 - **Vertical Cut (36s, X / Social cut)**: `video/out/picocare-vertical-en.mp4` *(paste X link here)*
