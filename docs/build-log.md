@@ -34,3 +34,5 @@ Dated record of what was built during the event. All commits in this repo are wi
 - Backend restarted on bilingual code, switched to `en`; English backfill landed (Ken's notes + weekly, real data). Node 94/94, Android 33+33 green.
 - Real-device English stills captured from the Galaxy S23 (`video/public/phone-*.png`, live field data).
 - Final Remotion submission films (`video/src/Main.tsx` 1:49 + `video/src/Vertical.tsx` 0:36) choreographed with 8-segment conversational English voiceover (`video/public/vo-en-*.mp3`) and custom felt-piano & ambient pad soundtrack (`video/public/bgm.mp3`).
+
+- Post-submission review fixes (`meta.16` / 116): additive schema migration, renewable caregiver sessions + recovery, self-mode-to-caregiver linking retaining identity/history, stale ELSE race protection + explicit help alerts, full-day feed selection, accuracy-aware movement aggregation + navigation persistence, Wi-Fi/cellular transport evidence, and independent provider error states. Regression checks: 106 Node tests; Android 36 cases per flavor (66 executed, 6 flavor skips), build/lint clean of errors. Device acceptance is recorded separately from these automated checks.

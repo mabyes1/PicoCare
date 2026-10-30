@@ -7,8 +7,8 @@ android {
         applicationId = "tw.picocare.meta"
         minSdk = 26
         targetSdk = 35
-        versionCode = 114
-        versionName = "1.0.0-meta.15"
+        versionCode = 116
+        versionName = "1.0.0-meta.16"
     }
     flavorDimensions += "side"
     productFlavors {

@@ -2,6 +2,7 @@ export type Workspace = { workspaceId: string; label: string; caregiverName: str
 export type PhoneContext = {
   batteryPercent: number | null; charging: boolean | null;
   network: 'online' | 'offline' | 'unknown'; screenInteractive: boolean | null;
+  networkEvidence?: { transports: ('wifi' | 'cellular' | 'vpn' | 'ethernet' | 'other')[]; observedAt: number; changedAt: number };
   ringer: 'normal' | 'vibrate' | 'silent' | 'unknown'; motion: 'moving' | 'stationary' | 'unknown';
   motionEvidence?: { observedAt: number; accuracy: number; speed: number; speedAccuracy: number } | null;
   usage?: { appId: string; category: 'video' | 'other'; observedAt: number; changedAt: number } | null;
@@ -54,7 +55,7 @@ export type SecretaryNote = { id: string; at: number; kind: string; title: strin
 export type SecretaryView = { decision: ContextDecision; latestMeta: ContextDecision | null; outing: SecretaryCase | null;
   confirmation: { topic: string; text: string; observedAt: number } | null; notes: SecretaryNote[];
   weekly: { text: string; at: number; model: string } | null };
-export type MetaIntegration = { enabled: boolean; status: string; model: string | null; requestsToday?: number; dailyLimit?: number; lastSuccessAt?: number | null; lastError?: string | null; lastSkipAt?: number | null; lastSkipReason?: string | null };
+export type MetaIntegration = { enabled: boolean; status: string; model: string | null; requestsToday?: number; dailyLimit?: number; lastSuccessAt?: number | null; lastError?: string | null; weeklyLastError?: string | null; lastSkipAt?: number | null; lastSkipReason?: string | null };
 export type PeopleResponse = { workspace: Workspace; serverAt: number; people: PersonView[]; alerts: CareAlert[]; meta: MetaIntegration };
 export type PersonDetail = {
   person: PersonView;

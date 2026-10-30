@@ -56,6 +56,7 @@ class CareConfig(context: Context) {
         val encrypted = cipher.iv + cipher.doFinal(response.getString("deviceToken").toByteArray(Charsets.UTF_8))
         check(prefs.edit().putString("token", Base64.encodeToString(encrypted, Base64.NO_WRAP))
             .putString("person_name", response.getString("personName")).putString("workspace", response.getString("workspaceLabel"))
+            .putBoolean("self_mode", response.optString("enrollmentMode", if (selfMode) "self" else "paired") == "self")
             .remove("enrollment_request").remove("enrollment_code").commit()) { t("Could not save the pairing", "配對資料儲存失敗") }
     }
     companion object {

@@ -17,6 +17,7 @@ type Row = Record<string, any>;
 export type Identity = { workspaceId: string; label: string; caregiverName: string; kind: 'personal' | 'institution'; timezone: string };
 const secret = () => randomBytes(32).toString('base64url');
 const id = () => randomUUID();
+export const sessionLifetime = 30 * 86400000;
 
 export class CareStore {
   db: DatabaseSync;
@@ -56,6 +57,13 @@ export class CareStore {
     if (!this.all('PRAGMA table_info(reminders)').some(c => c.name === 'question_id')) this.db.exec('ALTER TABLE reminders ADD COLUMN question_id TEXT');
     if (!this.all('PRAGMA table_info(questions)').some(c => c.name === 'topic')) this.db.exec("ALTER TABLE questions ADD COLUMN topic TEXT NOT NULL DEFAULT 'checkin'");
     if (!this.all('PRAGMA table_info(people)').some(c => c.name === 'enrollment_mode')) this.db.exec("ALTER TABLE people ADD COLUMN enrollment_mode TEXT NOT NULL DEFAULT 'paired'");
+    if (!this.all('PRAGMA table_info(people)').some(c => c.name === 'interaction_version')) this.db.exec('ALTER TABLE people ADD COLUMN interaction_version INTEGER NOT NULL DEFAULT 0');
+    if (!this.all('PRAGMA table_info(workspaces)').some(c => c.name === 'recovery_code')) {
+      this.transaction(() => {
+        this.db.exec('ALTER TABLE workspaces ADD COLUMN recovery_code TEXT');
+        this.run('UPDATE sessions SET expires=MAX(expires,?)', this.now() + sessionLifetime);
+      });
+    }
     this.flow = new CareWorkflow(this);
     this.secretary = new Secretary(this);
   }
@@ -105,15 +113,29 @@ export class CareStore {
     try { new Intl.DateTimeFormat('en', { timeZone: timezone }).format(); } catch { demand(false, '時區格式不正確'); }
     const workspaceId = id(), session = secret();
     this.transaction(() => {
-      this.run('INSERT INTO workspaces VALUES(?,?,?,?,?)', workspaceId, label, kind, caregiverName, timezone);
-      this.run('INSERT INTO sessions VALUES(?,?,?)', session, workspaceId, this.now() + 86400000);
+      this.run('INSERT INTO workspaces(id,label,kind,caregiver_name,timezone,recovery_code) VALUES(?,?,?,?,?,?)', workspaceId, label, kind, caregiverName, timezone, secret());
+      this.run('INSERT INTO sessions VALUES(?,?,?)', session, workspaceId, this.now() + sessionLifetime);
     });
     return { identity: { workspaceId, label, kind, caregiverName, timezone }, session };
   }
   identity(session: string | undefined): Identity {
     const row = session && this.get('SELECT w.* FROM workspaces w JOIN sessions s ON s.workspace_id=w.id WHERE s.token=? AND s.expires>?', session, this.now());
     demand(row, '請先建立或登入照顧空間', 401);
+    this.run('UPDATE sessions SET expires=? WHERE token=?', this.now() + sessionLifetime, session!);
     return { workspaceId: row.id, label: row.label, kind: row.kind, caregiverName: row.caregiver_name, timezone: row.timezone };
+  }
+  recoveryCode(identity: Identity): string {
+    let code = this.get('SELECT recovery_code FROM workspaces WHERE id=?', identity.workspaceId)?.recovery_code;
+    if (!code) { code = secret(); this.run('UPDATE workspaces SET recovery_code=? WHERE id=?', code, identity.workspaceId); }
+    return code;
+  }
+  restoreSession(value: unknown) {
+    const code = text(object(value).recoveryCode, '照顧空間恢復碼', 100);
+    const row = this.get('SELECT id FROM workspaces WHERE recovery_code=?', code);
+    demand(row, '恢復碼不正確', 401);
+    const session = secret();
+    this.run('INSERT INTO sessions VALUES(?,?,?)', session, row.id, this.now() + sessionLifetime);
+    return { session, identity: this.identity(session) };
   }
   createPairing(identity: Identity, value: unknown) {
     const name = text(object(value).displayName, '被照顧者稱呼', 40);
@@ -149,12 +171,12 @@ export class CareStore {
       const personId = existing?.person_id || id();
       if (!existing) {
         const workspaceId = id();
-        this.run('INSERT INTO workspaces VALUES(?,?,?,?,?)', workspaceId, `${name}的照護秘書`, 'personal', '本人實測（尚未配對照顧者）', 'Asia/Taipei');
+        this.run('INSERT INTO workspaces(id,label,kind,caregiver_name,timezone) VALUES(?,?,?,?,?)', workspaceId, `${name}的照護秘書`, 'personal', '本人實測（尚未配對照顧者）', 'Asia/Taipei');
         this.run("INSERT INTO people(id,workspace_id,name,device_token,enrollment_mode) VALUES(?,?,?,?,'self')", personId, workspaceId, name, secret());
         this.run('INSERT INTO self_enrollments VALUES(?,?,?)', requestId, personId, name);
       }
       const p = this.get('SELECT p.*,w.label FROM people p JOIN workspaces w ON w.id=p.workspace_id WHERE p.id=?', personId)!;
-      return { personId: p.id, personName: p.name, workspaceLabel: p.label, deviceToken: p.device_token, enrollmentMode: 'self', caregiverConnected: false };
+      return { personId: p.id, personName: p.name, workspaceLabel: p.label, deviceToken: p.device_token, enrollmentMode: p.enrollment_mode, caregiverConnected: p.enrollment_mode !== 'self' };
     });
   }
   selfPlan(token: string | undefined, value: unknown) {
@@ -165,6 +187,24 @@ export class CareStore {
   device(token: string | undefined): Row {
     const person = token && this.get('SELECT * FROM people WHERE device_token=?', token);
     demand(person && !person.demo, '手機配對憑證無效', 401); return person;
+  }
+  linkCaregiver(token: string | undefined, value: unknown) {
+    const b = object(value), code = text(b.code, '配對碼', 20).replaceAll('-', '').toUpperCase();
+    const requestId = text(b.requestId, '配對請求', 80);
+    return this.transaction(() => {
+      const p = this.device(token), pairing = this.get('SELECT * FROM pairings WHERE code=?', code);
+      demand(pairing, '配對碼不存在', 404);
+      const alreadyLinked = pairing.person_id === p.id && pairing.request_id === requestId;
+      demand(alreadyLinked || pairing.expires > this.now(), '配對碼已過期', 404);
+      demand(alreadyLinked || !pairing.person_id, '配對碼已被使用', 409);
+      demand(alreadyLinked || p.enrollment_mode === 'self', '這支手機已連上照顧者', 409);
+      if (!alreadyLinked) {
+        this.run("UPDATE people SET workspace_id=?,enrollment_mode='paired',revision=revision+1,interaction_version=interaction_version+1 WHERE id=?", pairing.workspace_id, p.id);
+        this.run('UPDATE pairings SET person_id=?,request_id=? WHERE code=?', p.id, requestId, code);
+      }
+      const workspace = this.get('SELECT label FROM workspaces WHERE id=?', pairing.workspace_id)!;
+      return { personId: p.id, personName: p.name, workspaceLabel: workspace.label, deviceToken: p.device_token, enrollmentMode: 'paired', caregiverConnected: true };
+    });
   }
   person(identity: Identity, personId: string): Row {
     const person = this.get('SELECT * FROM people WHERE id=? AND workspace_id=?', personId, identity.workspaceId);
@@ -246,6 +286,7 @@ export class CareStore {
       const receiptId = id();
       this.run('INSERT INTO events VALUES(?,?,?,?,?,?,?)', personId, event.eventId, event.kind, event.observedAt, this.now(), serialized, receiptId);
       this.run('UPDATE people SET last_seen=?,revision=revision+1 WHERE id=?', this.now(), personId);
+      if (!['context', 'reminder_result'].includes(event.kind)) this.run('UPDATE people SET interaction_version=interaction_version+1 WHERE id=?', personId);
       if (event.kind === 'context') this.run('UPDATE people SET context_json=?,context_at=? WHERE id=? AND (context_at IS NULL OR context_at<?)', JSON.stringify(event.context), event.observedAt, personId, event.observedAt);
       if (event.kind === 'checkin') {
         this.recordCheckin(personId, event.observedAt);
@@ -270,24 +311,31 @@ export class CareStore {
     if (!q || !q.answer_json) return null;
     const answer = JSON.parse(q.answer_json);
     if (answer.optionId !== 'else' || answer.review !== 'pending' || typeof answer.elseText !== 'string' || !answer.elseText) return null;
+    if (q.status !== 'answered' || this.now() - answer.observedAt > 120000) return null;
+    const before = this.get('SELECT interaction_version FROM people WHERE id=?', q.person_id)!.interaction_version;
     const reviewed = await useReviewer({ personId: q.person_id, questionId, prompt: q.prompt, options: JSON.parse(q.options_json).map((o: { label: string }) => ({ label: o.label })), elseText: answer.elseText });
     if (!reviewed || reviewed.review === 'pending') return null;
-    // Original text is never overwritten; only review and a summary are added.
-    const updated = { ...answer, review: reviewed.review, metaElseSummary: reviewed.summary };
-    this.run('UPDATE questions SET answer_json=? WHERE id=?', JSON.stringify(updated), questionId);
-    if (reviewed.review === 'clarified') {
-      const run = this.get('SELECT * FROM care_runs WHERE question_id=? AND state=?', questionId, 'escalated');
-      if (run) this.flow.finish(run, 'clarified', `Meta 整理：${reviewed.summary}（本人原話保留）`);
-      const sec = this.get('SELECT * FROM secretary_cases WHERE question_id=? AND state=?', questionId, 'escalated');
-      if (sec) this.secretary.finish(sec, 'clarified', `本人已確認：${reviewed.summary}（原話保留）`);
-    } else if (reviewed.review === 'needs_contact') {
-      let helpId = `else:${questionId}`;
-      for (const e of this.all("SELECT * FROM events WHERE person_id=? AND kind='question_answer'", q.person_id)) {
-        try { if (JSON.parse(e.body).questionId === questionId) { helpId = e.event_id; break; } } catch { /* ignore malformed event bodies */ }
+    return this.transaction(() => {
+      const current = this.get('SELECT * FROM questions WHERE id=?', questionId)!;
+      const person = this.get('SELECT * FROM people WHERE id=?', q.person_id)!;
+      if (current.answer_json !== q.answer_json || current.status !== 'answered' || person.interaction_version !== before || this.now() - answer.observedAt > 120000) return null;
+      const run = this.get('SELECT * FROM care_runs WHERE question_id=?', questionId);
+      const sec = this.get('SELECT * FROM secretary_cases WHERE question_id=?', questionId);
+      if (run && run.state !== 'escalated' || sec && sec.state !== 'escalated') return null;
+      this.run('UPDATE questions SET answer_json=? WHERE id=?', JSON.stringify({ ...answer, review: reviewed.review, metaElseSummary: reviewed.summary }), questionId);
+      if (reviewed.review === 'clarified') {
+        if (run) this.flow.finish(run, 'clarified', `Meta 整理：${reviewed.summary}（本人原話保留）`);
+        if (sec) this.secretary.finish(sec, 'clarified', `本人已確認：${reviewed.summary}（原話保留）`);
+      } else {
+        const eventRow = this.all("SELECT event_id,body FROM events WHERE person_id=? AND kind='question_answer'", q.person_id)
+          .find(e => JSON.parse(e.body).questionId === questionId);
+        const helpId = eventRow?.event_id || `else:${questionId}`;
+        if (!person.help_id || person.help_at <= answer.observedAt) this.run('UPDATE people SET help_id=?,help_at=? WHERE id=?', helpId, answer.observedAt, q.person_id);
+        this.flow.alert(q.person_id, `event:${helpId}`, 'help', this.lang() === 'en' ? 'The person asked to be contacted' : '本人希望照顧者聯絡', undefined, this.get('SELECT * FROM questions WHERE id=?', questionId), answer.observedAt);
       }
-      this.run('UPDATE people SET help_id=?,help_at=? WHERE id=?', helpId, this.now(), q.person_id);
-    }
-    return reviewed;
+      this.run('UPDATE people SET revision=revision+1,interaction_version=interaction_version+1 WHERE id=?', q.person_id);
+      return reviewed;
+    });
   }
   projection(person: Row, timezone: string) {
     const now = this.now(), context: Context | null = person.context_json ? JSON.parse(person.context_json) : null;
@@ -349,7 +397,7 @@ export class CareStore {
         this.flow.finish(run, 'resolved', note || '照顧者已聯絡並確認近況');
       }
       this.run('INSERT INTO contacts VALUES(?,?,?,?,?)', id(), personId, this.now(), outcome, note);
-      this.run('UPDATE people SET revision=revision+1 WHERE id=?', personId);
+      this.run('UPDATE people SET revision=revision+1,interaction_version=interaction_version+1 WHERE id=?', personId);
       return { saved: true };
     });
   }

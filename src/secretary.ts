@@ -51,7 +51,10 @@ export class Secretary {
   resolve(identity: Identity, personId: string, value: unknown) {
     this.s.person(identity, personId); const b = object(value), r = this.current(personId);
     demand(r && r.id === b.caseId && ['question_pending', 'deferred', 'escalated'].includes(r.state), '外出確認已有更新，請重新查看', 409);
-    this.s.transaction(() => this.finish(r, 'resolved', '照顧者已聯絡並釐清外出情況')); return { saved: true };
+    this.s.transaction(() => {
+      this.finish(r, 'resolved', '照顧者已聯絡並釐清外出情況');
+      this.s.run('UPDATE people SET revision=revision+1,interaction_version=interaction_version+1 WHERE id=?', personId);
+    }); return { saved: true };
   }
   escalate(r: Row, reason: string) {
     const q = this.s.get('SELECT * FROM questions WHERE id=?', r.question_id)!;

@@ -15,6 +15,28 @@ export function distance(a: { latitude: number; longitude: number }, b: { latitu
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.latitude * rad) * Math.cos(b.latitude * rad) * Math.sin(dLon / 2) ** 2;
   return 6371000 * 2 * Math.asin(Math.sqrt(Math.min(1, h)));
 }
+export function movementSummary(samples: ContextSample[]) {
+  let points: (ContextSample & { fix: NonNullable<PhoneContext['location']> })[] = [];
+  for (const s of [...samples].sort((a, b) => a.at - b.at)) {
+    const p = s.context.location;
+    if (!p || !['available', 'speed_unavailable'].includes(s.context.sources?.location || '') || p.accuracy > 50 || p.observedAt > s.at || s.at - p.observedAt > 2 * minute) continue;
+    const last = points.at(-1);
+    if (last && p.observedAt <= last.fix.observedAt) continue;
+    if (last && (p.observedAt - last.fix.observedAt > 3 * minute || Math.max(0, distance(last.fix, p) - last.fix.accuracy - p.accuracy) / ((p.observedAt - last.fix.observedAt) / 1000) > 50)) points = [];
+    points.push({ ...s, fix: p });
+  }
+  let travelled = 0, revisit = false;
+  for (let i = 1; i < points.length; i++) travelled += Math.max(0, distance(points[i - 1].fix, points[i].fix) - points[i - 1].fix.accuracy - points[i].fix.accuracy);
+  for (let i = 0; i < points.length - 2 && !revisit; i++) {
+    let away = false;
+    for (let j = i + 1; j < points.length; j++) {
+      const d = distance(points[i].fix, points[j].fix), uncertainty = points[i].fix.accuracy + points[j].fix.accuracy;
+      if (d - uncertainty > 150) away = true;
+      if (away && d + uncertainty < 90 && points[j].fix.observedAt - points[i].fix.observedAt >= 5 * minute) { revisit = true; break; }
+    }
+  }
+  return { points, travelled, revisit };
+}
 export class LocalSituationInterpreter implements SituationInterpreter {
   evaluate(input: ContextSample[], now: number, lang: Lang = 'zh'): ContextDecision {
     const en = lang === 'en';
@@ -25,28 +47,8 @@ export class LocalSituationInterpreter implements SituationInterpreter {
     if (!latest || !fresh(latest.at, now)) return base;
     const c = latest.context;
     base.title = c.screenInteractive === false ? (en ? 'Phone screen is off' : '手機螢幕已關閉') : c.screenInteractive === true ? (en ? 'Phone screen is on' : '手機螢幕開啟') : (en ? 'Phone status updated' : '手機狀態已更新');
-    // Build a contiguous series of independent fixes. Re-uploading a cached fix is not another movement sample.
-    let points: (ContextSample & { fix: NonNullable<PhoneContext['location']> })[] = [];
-    for (const s of samples) {
-      const p = s.context.location;
-      if (!p || !['available', 'speed_unavailable'].includes(s.context.sources?.location || '') || p.accuracy > 50 || p.observedAt > s.at || s.at - p.observedAt > 2 * minute) continue;
-      const last = points.at(-1);
-      if (last && p.observedAt <= last.fix.observedAt) continue;
-      if (last && (p.observedAt - last.fix.observedAt > 3 * minute || Math.max(0, distance(last.fix, p) - last.fix.accuracy - p.accuracy) / ((p.observedAt - last.fix.observedAt) / 1000) > 50)) points = [];
-      points.push({ ...s, fix: p });
-    }
+    const { points, travelled, revisit } = movementSummary(samples);
     const last = points.at(-1), first = points[0];
-    let travelled = 0, revisit = false;
-    for (let i = 1; i < points.length; i++) travelled += Math.max(0, distance(points[i - 1].fix, points[i].fix) - points[i - 1].fix.accuracy - points[i].fix.accuracy);
-    // A revisit requires a definite excursion and a later definite return, including accuracy margins.
-    for (let i = 0; i < points.length - 2 && !revisit; i++) {
-      let away = false;
-      for (let j = i + 1; j < points.length; j++) {
-        const d = distance(points[i].fix, points[j].fix), uncertainty = points[i].fix.accuracy + points[j].fix.accuracy;
-        if (d - uncertainty > 150) away = true;
-        if (away && d + uncertainty < 90 && points[j].fix.observedAt - points[i].fix.observedAt >= 5 * minute) { revisit = true; break; }
-      }
-    }
     const navigation = c.sources?.notifications === 'available' && c.notifications.find(n => n.category === 'navigation' && fresh(n.observedAt, now));
     const earlierBattery = samples.find(s => s.context.batteryPercent !== null && latest.at - s.at >= 5 * minute);
     const draining = c.batteryPercent !== null && c.batteryPercent <= 15 && c.charging === false && earlierBattery?.context.batteryPercent !== null && earlierBattery !== undefined && earlierBattery.context.batteryPercent! - c.batteryPercent >= 5;

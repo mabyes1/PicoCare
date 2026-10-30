@@ -204,8 +204,8 @@ test('metaInput 帶聚合線索：有移動距離、無座標、簽名隨聚合�
   assert.ok(agg);
   assert.ok(!agg!.label.includes('25.'));
   assert.ok(!agg!.label.includes('121'));
-  assert.match(agg!.label, /移動總距離約 [1-9]/);
-  assert.match(agg!.label, /導航通知 9 次/);
+  assert.match(agg!.label, /移動距離下限約 [1-9]/);
+  assert.match(agg!.label, /導航持續觀測約 8 分鐘/);
   const moved = wildSamples().map((s, i) => i === 8 ? { ...s, context: { ...s.context, location: { latitude: 26, longitude: 121, accuracy: 10, observedAt: s.at } } } : s);
   const input2 = metaInput(moved, now, local)!;
   assert.notEqual(input2.signature, input.signature);

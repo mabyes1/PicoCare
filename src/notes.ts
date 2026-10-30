@@ -38,7 +38,7 @@ export class SecretaryNotes {
   }
   private today(personId: string, timezone: string, now: number): ContextSample[] {
     const day = dayAt(now, timezone);
-    return this.s.all("SELECT event_id,observed_at,body FROM events WHERE person_id=? AND kind='context' AND observed_at>=? AND observed_at<=? ORDER BY observed_at ASC LIMIT 500", personId, now - 86400000, now)
+    return this.s.all("SELECT event_id,observed_at,body FROM events WHERE person_id=? AND kind='context' AND observed_at>=? AND observed_at<=? ORDER BY observed_at ASC", personId, now - 86400000, now)
       .map(r => ({ id: r.event_id, at: r.observed_at, context: JSON.parse(r.body).context }))
       .filter(s => dayAt(s.at, timezone) === day);
   }

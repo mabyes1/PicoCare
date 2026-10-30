@@ -147,6 +147,22 @@ class CareActivity : Activity() {
             UiBits.styleInput(this, 10)
         }
         setupCard.addView(name)
+        setupCard.addView(button(t("Create my care space", "建立我的照顧空間"), primary = true, topMarginDp = 14) {
+            work {
+                session.endpoint = endpoint.text.toString()
+                CareWebApi(session, this).createWorkspace(t("My care space", "我的照顧空間"), name.text.toString().ifBlank { t("Family", "家人") })
+                runOnUiThread { if (!isFinishing) showPeople() }
+            }
+        })
+        val recovery = EditText(this).apply { hint = t("Recovery code for an existing space", "原照顧空間的恢復碼"); isSingleLine = true; UiBits.styleInput(this, 10) }
+        setupCard.addView(recovery)
+        setupCard.addView(compactButton(t("Restore my care space", "回到原照顧空間")) {
+            work {
+                session.endpoint = endpoint.text.toString()
+                CareWebApi(session, this).restore(recovery.text.toString())
+                runOnUiThread { if (!isFinishing) showPeople() }
+            }
+        })
         val z = AppLang.isZh(this)
         setupCard.addView(button(t("Create & join the demo", "建立並加入示範"), primary = true, topMarginDp = 14) {
             work {
@@ -175,6 +191,31 @@ class CareActivity : Activity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(box)
         root.addView(compactButton(t("Refresh", "重新整理"), topMarginDp = 14) { showPeople() })
+        root.addView(compactButton(t("Connect a person's phone", "連接長輩手機")) {
+            val name = EditText(this).apply { hint = t("Person's name", "長輩稱呼"); isSingleLine = true }
+            AlertDialog.Builder(this).setTitle(t("Connect a phone", "連接手機")).setView(name)
+                .setNegativeButton(t("Cancel", "取消"), null).setPositiveButton(t("Get pairing code", "取得配對碼")) { _, _ ->
+                    val value = name.text.toString()
+                    work {
+                        val pair = CareWebApi(session, this).post("/api/pairings", JSONObject().put("displayName", value))
+                        runOnUiThread { if (!isFinishing) AlertDialog.Builder(this).setTitle(t("Enter on the person's phone", "請在長輩手機輸入"))
+                            .setMessage(pair.getString("code") + "\n" + t("Valid for 10 minutes. Existing secretary data is kept.", "十分鐘內有效。會保留原本秘書的資料。"))
+                            .setPositiveButton(t("Done", "完成"), null).show() }
+                    }
+                }.show()
+        })
+        root.addView(compactButton(t("Care space recovery", "照顧空間恢復")) {
+            work {
+                CareWebApi(session, this).get("/api/session")
+                runOnUiThread { if (!isFinishing) {
+                    val value = EditText(this).apply { setText(session.recoveryCode); isSingleLine = true; keyListener = null; setSelectAllOnFocus(true) }
+                    AlertDialog.Builder(this).setTitle(t("Keep this recovery code private", "請妥善保管恢復碼"))
+                        .setMessage(t("Use it to reopen this same space. Anyone with the code can access it.", "可用來回到同一個照顧空間。持有這組碼的人可以存取空間。"))
+                        .setView(value).setPositiveButton(t("Done", "完成"), null).show()
+                } }
+            }
+        })
+        root.addView(compactButton(t("Restore an existing space", "恢復原照顧空間")) { showSetup() })
         root.addView(compactButton(t("Language 語言：${AppLang.label(this)}", "語言 Language：${AppLang.label(this)}"), topMarginDp = 6) { AppLang.toggle(this); recreate() })
         work {
             val api = CareWebApi(session, this)

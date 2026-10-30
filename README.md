@@ -25,7 +25,7 @@ We built **PicoCare** because we believe **care should never feel like surveilla
 
 PicoCare gives an aging parent their own **personal care secretary** (`tw.picocare.meta`), paired with a companion app for their family or care team (`tw.picocare.meta.care`). Instead of watching through a lens, the phone listens only to the gentle rhythm of everyday life—screen wakes, morning steps, media playback, navigation cues, and overnight charging. When a day’s rhythm shifts in a way worth checking, the secretary **asks the parent first**—with simple tap options, never an overwhelming chatbot—and only reaches out to the family when things remain unclear.
 
-It never diagnoses illness. It never gives medical advice. It never cries wolf.  
+It never diagnoses illness. It never gives medical advice. It asks the person before escalating an uncertain situation.
 It simply keeps a warm, honest thread between the people who love each other most.
 
 ---
@@ -71,12 +71,12 @@ flowchart LR
 | Secretary Role | Model & Pathway | Why Only Meta Can Do This |
 | :--- | :--- | :--- |
 | **1. Weekly Family Letter**<br/>*(Open Weights Track)* | **`meta-models/muse-spark-open-1026`**<br/>*(via Baseten Open-Weight API, automatic fallback to `muse-spark-1.3`)* | Reads 7 days of daily observations, check-ins, and answers, then distills them into a warm, human `≤400`-character narrative for the family. The UI explicitly badges **`Open weights`** vs **`Meta`** so families always know which model wrote the reflection. |
-| **2. Weak-Signal Situation Fusion** | **`muse-spark-1.3`**<br/>*(Meta Official API · Structured JSON Output)* | Fuses subtle multi-sensor clues—such as *1,779m of movement + 9 repeated navigation prompts + draining battery*—into one natural, respectful check-in question when rigid single-sensor rules would miss the pattern. |
+| **2. Weak-Signal Situation Fusion** | **`muse-spark-1.3`**<br/>*(Meta Official API · Structured JSON Output)* | Fuses subtle multi-sensor clues—such as *over 1 km of accuracy-adjusted movement + sustained navigation*—into one natural, respectful check-in question when rigid single-sensor rules would miss the pattern. |
 | **3. Nuanced `ELSE` Free-Text Triage** | **`muse-spark-1.3`**<br/>*(Meta Official API · Low-Latency Reasoning)* | When a parent taps *"None of the above"* (`ELSE`) and writes in their own words (*"Just taking a walk nearby, I'm fine"*), Meta judges whether the concern is **`clarified`** (automatically retracting pending caregiver alerts while preserving the parent's exact words), **`needs_contact`**, or **`pending`**. |
 
-### Four Unbreakable Guardrails
+### Evidence and Action Controls
 
-1. **Zero Raw PII to the Model**: Exact GPS coordinates, app package names, and raw private notification texts are **never** sent to the LLM by default—only aggregated distances, counts, category labels, and timestamps.
+1. **Minimized Model Inputs**: Default situation inputs omit exact GPS coordinates and raw notification text. They include aggregate movement, category labels, timestamps, and selected foreground/media app identifiers. Weekly reflections use the person’s display name, feed notes, and replies. Optional detailed notification sharing is explicitly configured.
 2. **Verified Evidence Citations**: Every `muse-spark-1.3` reading must cite real `evidenceIds` from the current sample window. If a model output cites a non-existent ID, violates JSON schema, or arrives after the phone's state has already changed, it is discarded immediately.
 3. **Two-Signal Minimum for Proactive Check-Ins**: Meta can propose a proactive check-in (`outing/confirm` or `video/wait`), but only when backed by **at least two distinct pieces of evidence**, including at least one fresh observation. Thin evidence means respectful silence.
 4. **Strict Non-Medical Boundary**: Every output from both `muse-spark-1.3` and `muse-spark-open-1026` passes a deterministic medical/diagnostic filter before storage or display. Zero medical advice.
@@ -92,7 +92,7 @@ At 2:00 PM, your father hasn’t tapped his daily check-in. An ordinary check-in
 PicoCare’s on-device collector notices continuous foreground media playback and active audio sessions. The secretary recognizes he is simply enjoying a video, quietly postpones the check-in prompt, and logs the observation transparently—letting him finish his movie in peace.
 
 ### Scenario 2: The Unfamiliar Evening Walk *(Catching Subtle Trouble Early)*
-At 5:40 PM, your mother is out walking. Her battery isn't critically low yet (`80%`), so a basic battery alert wouldn't fire. But PicoCare aggregates **`1,779 meters` of movement**, **repeated location revisits**, and **`9` consecutive navigation notifications**.  
+At 5:40 PM, your mother is out walking. Her battery isn't critically low yet (`80%`), so a basic battery alert wouldn't fire. But PicoCare aggregates **accuracy-adjusted movement** and **sustained navigation observations**.
 `muse-spark-1.3` fuses those weak signals and gently asks her on her screen first:
 > *"Looks like you're out and moving around — is everything going smoothly?"*
 > - `[ Everything is fine ]`
@@ -111,9 +111,9 @@ Built from the ground up during the hackathon (**Oct 26–30, 2026**) with produ
 - **Zero Runtime Dependencies on the Backend**: Pure **TypeScript + Node.js (`24.12+`)** and built-in **SQLite**, sharing a strict end-to-end contract (`shared/protocol.ts`) with the web and Android clients.
 - **Two Native Kotlin Android Apps**: Built from a single codebase (`android/`) with two flavors—`tw.picocare.meta` (Elder) and `tw.picocare.meta.care` (Caregiver)—featuring a transactional **7-day on-device SQLite evidence timeline** and an offline-resilient, idempotent pending outbox that prioritizes help requests and answers over background telemetry when connectivity returns.
 - **Floating Greeting Schedule with Cooldown**: No robotic 9:00 AM alarms. The secretary picks a natural moment when the parent is already using their phone, enforces an **8-hour cooldown** between questions, respects **quiet hours (`22:00–07:00`)**, and falls back to a gentle `20:00` evening check only if the phone has been completely silent all day.
-- **160 Automated Tests Green**:
-  - **94 / 94 Node.js & TypeScript tests** covering real HTTP roundtrips, SQLite persistence, floating schedules, `muse-spark-1.3` wild-2 hypothesis gating, `ELSE` free-text retraction, and `muse-spark-open-1026` Baseten open-weight fallback.
-  - **66 / 66 Android JVM & Robolectric unit tests** (`33` per flavor) covering navigation retention, location accuracy filtering, offline outbox replay, and schema migrations, with **0 Lint errors**.
+- **Regression Coverage**:
+  - **106 / 106 Node.js & TypeScript tests** covering real HTTP roundtrips, SQLite persistence, floating schedules, `muse-spark-1.3` wild-2 hypothesis gating, `ELSE` free-text retraction, and `muse-spark-open-1026` Baseten open-weight fallback.
+  - **72 Android JVM & Robolectric test cases** (`36` per flavor; 66 executed, 6 skipped by flavor) covering navigation retention, location accuracy filtering, offline outbox replay, and schema migrations, with **0 Lint errors**.
 
 ---
 
@@ -124,7 +124,7 @@ Built from the ground up during the hackathon (**Oct 26–30, 2026**) with produ
 ```powershell
 npm install
 npm run check     # TypeScript strict typecheck (clean)
-npm test          # 94/94 automated test suite
+npm test          # 106/106 automated test suite
 npm run build
 npm start -- --demo
 ```
@@ -155,7 +155,7 @@ npm run start:meta   # Starts PicoCare with live Meta Muse Spark + Open Weights
 ### 3. Build the Android Apps (JDK 17 · Android SDK 35 · Gradle 8.13)
 
 ```powershell
-# Run Android Lint + 33 unit tests per flavor
+# Run Android Lint + 36 test cases per flavor
 .\scripts\build-android.ps1 -Offline
 
 # Build Elder Secretary APK (tw.picocare.meta) & Caregiver APK (tw.picocare.meta.care)
@@ -176,6 +176,18 @@ npm run start:meta   # Starts PicoCare with live Meta Muse Spark + Open Weights
 ---
 
 <div align="center">
-  <b>PicoCare</b> · <i>No medical advice. No false alarms. Only care.</i><br/>
+  <b>PicoCare</b> · <i>Everyday care, grounded in evidence and the person’s own words.</i><br/>
   Built with ❤️ using <b>Meta Muse Spark 1.3</b> & <b>Muse Spark Open 1026</b>
 </div>
+
+## October 30 Review Fixes (meta.16 / 116)
+
+- Caregiver sessions renew with use (30-day inactivity window). A private recovery code reopens the same workspace after expiration; Android and web clients retain it for recovery. Keep the code private because it grants access to that care space.
+- An existing self-mode secretary can join a caregiver’s space using a pairing code while retaining the same person ID, device credential, timeline, plan, and help records. The caregiver app now supports real space creation, pairing-code creation, and recovery alongside its optional demo.
+- Late answers cannot withdraw current alerts. A delayed model result cannot override a subsequent check-in, help request, or caregiver resolution; accepted contact requests create an explicit help alert with the original answer time.
+- Daily feed generation considers the full day rather than the first 500 samples.
+- Wi-Fi/cellular/VPN/ethernet transport and transition time are collected without SSID or BSSID. Wi-Fi is supporting context, not proof of being home. Stable Wi-Fi requires stronger movement evidence for a model-only outing question; substantial movement can still warrant a question.
+- Movement aggregates share the local interpreter’s accuracy, freshness, independent-fix, and jump filters. Navigation persistence is measured separately from distinct notification publication times.
+- Baseten and official Meta API failures are isolated. Neither provider disables the other’s functioning workflow.
+
+The caregiver Android app refreshes when opened or requested. Background caregiver push delivery is not implemented in this prototype.

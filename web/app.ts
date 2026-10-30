@@ -45,10 +45,17 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, value?: string, class
 function button(label: string, work: () => void | Promise<void>, className = '') {
   const node = el('button', label, className); node.type = 'button'; node.addEventListener('click', () => void action(work)); return node;
 }
-async function api<T>(path: string, data?: unknown): Promise<T> {
+async function api<T>(path: string, data?: unknown, retry = true): Promise<T> {
   const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin',
     ...(data === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }) });
-  const result = await response.json(); if (!response.ok) throw new Error(result.error || '連線暫時中斷'); return result;
+  const result = await response.json();
+  if (response.status === 401 && retry && path !== '/api/session/restore') {
+    const code = localStorage.getItem('picocare-recovery');
+    if (code) { await api('/api/session/restore', { recoveryCode: code }, false); return api<T>(path, data, false); }
+  }
+  if (!response.ok) throw new Error(result.error || '連線暫時中斷');
+  if (result.recoveryCode) localStorage.setItem('picocare-recovery', result.recoveryCode);
+  return result;
 }
 function toast(message: string) { const node = $('toast'); node.textContent = message; node.hidden = false; setTimeout(() => { node.hidden = true; }, 5000); }
 async function action(work: () => void | Promise<void>) {
@@ -72,7 +79,11 @@ function onboarding() {
   form.append(kindLabel, input('你的稱呼', 'caregiverName', '例如：小安'), input('照顧空間名稱', 'label', '例如：我們一家、晴日照護中心'));
   const submit = el('button', '建立照顧空間', 'primary'); submit.type = 'submit'; form.append(submit);
   form.addEventListener('submit', event => { event.preventDefault(); void action(async () => { const data = Object.fromEntries(new FormData(form)); const result = await api<{workspace: Workspace}>('/api/workspaces', data); workspace = result.workspace; await init(); }); });
-  panel.append(form, el('p', '本機開發版 · 照顧空間保留於目前瀏覽器工作階段', 'footnote')); page.append(story, panel); app.append(page);
+  const restore = el('form'), recovery = el('input'); recovery.placeholder = '原照顧空間的恢復碼'; recovery.required = true; recovery.autocomplete = 'off';
+  const restoreLabel = el('label', '回到原照顧空間'); restoreLabel.append(recovery);
+  const restoreButton = el('button', '恢復原空間', 'secondary'); restoreButton.type = 'submit'; restore.append(restoreLabel, restoreButton);
+  restore.addEventListener('submit', event => { event.preventDefault(); void action(async () => { await api('/api/session/restore', { recoveryCode: recovery.value.trim() }); await init(); }); });
+  panel.append(form, restore, el('p', '原空間、配對與歷史會持續保留。可用恢復碼回到同一空間。', 'footnote')); page.append(story, panel); app.append(page);
 }
 function shell() {
   app.replaceChildren();
@@ -81,6 +92,13 @@ function shell() {
   const allButton = button('◉  關懷總覽', () => { filter = 'all'; render(); }, 'nav-item active'); allButton.dataset.filter = 'all';
   const attentionButton = button('♡  需要關注', () => { filter = 'attention'; render(); }, 'nav-item'); attentionButton.dataset.filter = 'attention';
   nav.append(allButton, attentionButton); sidebar.append(nav);
+  sidebar.append(button('照顧空間恢復碼', async () => {
+    const result = await api<{recoveryCode: string}>('/api/session');
+    const dialog = el('dialog'), code = el('input'); code.readOnly = true; code.value = result.recoveryCode;
+    code.addEventListener('focus', () => code.select());
+    dialog.append(el('h2', '請妥善保管恢復碼'), el('p', '可用來回到同一個空間。持有這組碼的人可以存取空間。'), code, button('完成', () => { dialog.close(); dialog.remove(); }));
+    document.body.append(dialog); dialog.showModal();
+  }, 'text-button'));
   const note = el('div', undefined, 'sidebar-note'); note.append(el('span', '一份關心，多一點理解。'), el('p', '先看線索，再決定下一步。')); sidebar.append(note, el('div', `${workspace!.caregiverName} · 照顧者`, 'caregiver')); app.append(sidebar);
   const main = el('main', undefined, 'main');
   const top = el('header', undefined, 'topbar'); top.append(el('span', workspace!.kind === 'institution' ? '機構工作台 / 關懷總覽' : '我的關懷 / 最近狀況'), el('span', modelLabel(), 'model-badge')); main.append(top);

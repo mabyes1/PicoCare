@@ -75,6 +75,15 @@ object DeviceContextReader {
         val cm = context.getSystemService(ConnectivityManager::class.java)
         val caps = cm.getNetworkCapabilities(cm.activeNetwork)
         val network = when { caps == null -> "offline"; caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "online"; else -> "unknown" }
+        val transports = mutableListOf<String>()
+        if (caps != null) {
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) transports.add("wifi")
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) transports.add("cellular")
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) transports.add("vpn")
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) transports.add("ethernet")
+            if (transports.isEmpty()) transports.add("other")
+        }
+        val networkEvidence = NetworkEvidence.capture(prefs, transports, now)
         val ringer = when (context.getSystemService(AudioManager::class.java).ringerMode) { AudioManager.RINGER_MODE_NORMAL -> "normal"; AudioManager.RINGER_MODE_VIBRATE -> "vibrate"; AudioManager.RINGER_MODE_SILENT -> "silent"; else -> "unknown" }
         val (notificationState, notes) = CareNotificationListener.snapshot(context, prefs.getBoolean("notifications", false), detailed, now)
         val (usageState, usage) = ActivityEvidenceReader.usage(context, prefs.getBoolean("usage", false), now)
@@ -106,10 +115,20 @@ object DeviceContextReader {
         }
         return JSONObject().put("batteryPercent", if (level >= 0 && scale > 0) (level * 100 / scale) else JSONObject.NULL)
             .put("charging", if (charge < 0) JSONObject.NULL else charge == BatteryManager.BATTERY_STATUS_CHARGING || charge == BatteryManager.BATTERY_STATUS_FULL)
-            .put("network", network).put("screenInteractive", context.getSystemService(PowerManager::class.java).isInteractive)
+            .put("network", network).put("networkEvidence", networkEvidence).put("screenInteractive", context.getSystemService(PowerManager::class.java).isInteractive)
             .put("ringer", ringer).put("motion", motion).put("motionEvidence", motionEvidence).put("location", location).put("notifications", notes)
             .put("usage", usage ?: JSONObject.NULL).put("media", media ?: JSONObject.NULL)
             .put("sources", JSONObject().put("notifications", notificationState).put("location", locationState).put("usage", usageState).put("media", mediaState))
             .put("sharing", if (detailed) "detailed" else "summary")
+    }
+}
+
+object NetworkEvidence {
+    fun capture(prefs: android.content.SharedPreferences, transports: List<String>, now: Long): JSONObject {
+        val transportKey = transports.joinToString(",")
+        val priorChange = prefs.getLong("network_changed_at", 0)
+        val changedAt = if (prefs.getString("network_transports", null) == transportKey && priorChange in 1..now) priorChange else now
+        prefs.edit().putString("network_transports", transportKey).putLong("network_changed_at", changedAt).apply()
+        return JSONObject().put("transports", JSONArray(transports)).put("observedAt", now).put("changedAt", changedAt)
     }
 }

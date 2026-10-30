@@ -25,6 +25,14 @@ object SelfInsight {
         lines.add(if (z) "裝置：${if (c.isNull("screenInteractive")) "互動狀態未知" else if (c.getBoolean("screenInteractive")) "可互動" else "不可互動"}"
             else "Device: ${if (c.isNull("screenInteractive")) "interaction unknown" else if (c.getBoolean("screenInteractive")) "interactive" else "not interactive"}")
         val sources = c.optJSONObject("sources")
+        c.optJSONObject("networkEvidence")?.let {
+            val raw = it.optJSONArray("transports")
+            val types = if (raw == null || raw.length() == 0) (if (z) "沒有使用中的網路" else "No active network") else
+                (0 until raw.length()).joinToString(" / ") { i -> when (raw.optString(i)) {
+                    "wifi" -> "Wi-Fi"; "cellular" -> if (z) "行動網路" else "Cellular"; "vpn" -> "VPN"; "ethernet" -> "Ethernet"; else -> if (z) "其他" else "Other"
+                } }
+            lines.add(if (z) "網路：$types；切換 ${time(it.optLong("changedAt"), lang)}" else "Network: $types; changed ${time(it.optLong("changedAt"), lang)}")
+        }
         val names = if (z) listOf("usage" to "前景 App", "media" to "媒體播放", "notifications" to "通知", "location" to "位置")
             else listOf("usage" to "Foreground app", "media" to "Media", "notifications" to "Notifications", "location" to "Location")
         for ((key, label) in names) lines.add(if (z) "$label 來源：${sourceLabel(sources?.optString(key), lang)}" else "$label source: ${sourceLabel(sources?.optString(key), lang)}")

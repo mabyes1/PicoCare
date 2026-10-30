@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
-import { CareStore } from './store.ts';
+import { CareStore, sessionLifetime } from './store.ts';
 import { demand, object, Problem } from './domain.ts';
 import { isLang } from './lang.ts';
 import type { Lang } from './lang.ts';
@@ -13,6 +13,7 @@ import { MetaSecretary } from './meta-secretary.ts';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const bearer = (req: IncomingMessage) => /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization || '')?.[1];
 const cookie = (req: IncomingMessage) => /(?:^|;\s*)picocare_session=([A-Za-z0-9_-]+)/.exec(req.headers.cookie || '')?.[1];
+const sessionCookie = (token: string) => `picocare_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionLifetime / 1000}`;
 
 async function body(req: IncomingMessage): Promise<unknown> {
   demand((req.headers['content-type'] || '').split(';')[0] === 'application/json', '請使用 application/json', 415);
@@ -34,8 +35,13 @@ export function makeServer(store: CareStore, options: { allowDemo?: boolean; sch
       if (method === 'GET' && path === '/health') return json(res, 200, { service: 'PicoCare', version: '0.1.0', meta: store.metaStatus() });
       if (method === 'POST' && path === '/api/workspaces') {
         const created = store.createWorkspace(await body(req));
-        res.setHeader('Set-Cookie', `picocare_session=${created.session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`);
-        return json(res, 201, { workspace: created.identity });
+        res.setHeader('Set-Cookie', sessionCookie(created.session));
+        return json(res, 201, { workspace: created.identity, recoveryCode: store.recoveryCode(created.identity) });
+      }
+      if (method === 'POST' && path === '/api/session/restore') {
+        const restored = store.restoreSession(await body(req));
+        res.setHeader('Set-Cookie', sessionCookie(restored.session));
+        return json(res, 200, { workspace: restored.identity, recoveryCode: store.recoveryCode(restored.identity) });
       }
       if (method === 'POST' && path === '/api/device/enroll') return json(res, 201, store.enroll(await body(req)));
       if (method === 'POST' && path === '/api/device/self-enroll') return json(res, 201, store.selfEnroll(await body(req)));
@@ -43,6 +49,7 @@ export function makeServer(store: CareStore, options: { allowDemo?: boolean; sch
         if (method === 'POST' && path === '/api/device/events') return json(res, 202, store.ingest(bearer(req), await body(req)));
         if (method === 'GET' && path === '/api/device/status') return json(res, 200, store.deviceStatus(bearer(req)));
         if (method === 'POST' && path === '/api/device/plan') return json(res, 200, store.selfPlan(bearer(req), await body(req)));
+        if (method === 'POST' && path === '/api/device/link') return json(res, 200, store.linkCaregiver(bearer(req), await body(req)));
         throw new Problem(404, '找不到這個手機 API');
       }
       if ((method === 'GET' || method === 'POST') && path === '/api/lang') {
@@ -56,7 +63,8 @@ export function makeServer(store: CareStore, options: { allowDemo?: boolean; sch
       }
       if (path.startsWith('/api/')) {
         const identity = store.identity(cookie(req));
-        if (method === 'GET' && path === '/api/session') return json(res, 200, { workspace: identity, demoEnabled: !!options.allowDemo });
+        res.setHeader('Set-Cookie', sessionCookie(cookie(req)!));
+        if (method === 'GET' && path === '/api/session') return json(res, 200, { workspace: identity, demoEnabled: !!options.allowDemo, recoveryCode: store.recoveryCode(identity) });
         if (method === 'GET' && path === '/api/people') return json(res, 200, store.list(identity));
         if (method === 'GET' && path === '/api/alerts') return json(res, 200, { alerts: store.flow.alerts(identity) });
         const alertMatch = /^\/api\/alerts\/([a-f0-9-]{36})\/read$/.exec(path);

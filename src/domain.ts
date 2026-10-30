@@ -59,7 +59,7 @@ export function parseEvent(value: unknown, now: number): DeviceEvent {
   }
   if (kind === 'context') {
     const c = object(b.context);
-    const keys = ['batteryPercent', 'charging', 'network', 'screenInteractive', 'ringer', 'motion', 'motionEvidence', 'sources', 'usage', 'media', 'location', 'notifications', 'sharing'];
+    const keys = ['batteryPercent', 'charging', 'network', 'networkEvidence', 'screenInteractive', 'ringer', 'motion', 'motionEvidence', 'sources', 'usage', 'media', 'location', 'notifications', 'sharing'];
     demand(Object.keys(c).every(k => keys.includes(k)), '情境含有不支援的欄位');
     demand(c.batteryPercent === null || typeof c.batteryPercent === 'number' && Number.isInteger(c.batteryPercent) && c.batteryPercent >= 0 && c.batteryPercent <= 100, '電量格式不正確');
     const sharing = oneOf(c.sharing, ['summary', 'detailed'], '分享方式');
@@ -124,6 +124,17 @@ export function parseEvent(value: unknown, now: number): DeviceEvent {
         media = { appId: text(m.appId, '媒體 App', 160), state: oneOf(m.state, ['playing', 'paused', 'stopped', 'unknown'], '播放狀態'), observedAt };
       }
     }
+    let networkEvidence: Context['networkEvidence'];
+    if (c.networkEvidence !== undefined) {
+      const n = object(c.networkEvidence);
+      demand(Object.keys(n).every(k => ['transports', 'observedAt', 'changedAt'].includes(k)), '網路線索含有不支援的欄位');
+      demand(Array.isArray(n.transports) && n.transports.length <= 5, '網路類型格式不正確');
+      const transports = n.transports.map(t => oneOf(t, ['wifi', 'cellular', 'vpn', 'ethernet', 'other'], '網路類型'));
+      demand(new Set(transports).size === transports.length, '網路類型不可重複');
+      const observedAt = dateTime(n.observedAt, now);
+      demand(observedAt <= event.observedAt && Number.isSafeInteger(n.changedAt) && (n.changedAt as number) >= 0 && (n.changedAt as number) <= observedAt, '網路線索時間不正確');
+      networkEvidence = { transports, observedAt, changedAt: n.changedAt as number };
+    }
     event.context = {
       batteryPercent: c.batteryPercent as number | null, charging: nullableBoolean(c.charging, '充電'),
       screenInteractive: nullableBoolean(c.screenInteractive, '可互動狀態'),
@@ -131,7 +142,8 @@ export function parseEvent(value: unknown, now: number): DeviceEvent {
       ringer: oneOf(c.ringer, ['normal', 'vibrate', 'silent', 'unknown'], '鈴聲'),
       motion: oneOf(c.motion, ['moving', 'stationary', 'unknown'], '移動'), location, notifications, sharing,
       ...(motionEvidence === undefined ? {} : { motionEvidence }), ...(sources === undefined ? {} : { sources }),
-      ...(usage === undefined ? {} : { usage }), ...(media === undefined ? {} : { media })
+      ...(usage === undefined ? {} : { usage }), ...(media === undefined ? {} : { media }),
+      ...(networkEvidence === undefined ? {} : { networkEvidence })
     };
   }
   return event;

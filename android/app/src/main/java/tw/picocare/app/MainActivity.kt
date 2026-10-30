@@ -645,7 +645,7 @@ class MainActivity : Activity() {
 
     private fun pairing() {
         val config = CareConfig(this)
-        if (config.paired) { toast(t("Paired as ${config.personName}. This build keeps your pairing and never overwrites existing data.", "已配對：${config.personName}。這個版本會保留配對，不會覆蓋既有資料。")); return }
+        if (config.paired && !config.selfMode) { toast(t("Paired as ${config.personName}. This build keeps your pairing and never overwrites existing data.", "已配對：${config.personName}。這個版本會保留配對，不會覆蓋既有資料。")); return }
         val form = dialogColumn()
         val endpoint = EditText(this).apply {
             hint = t("Service URL", "服務網址")
@@ -672,7 +672,9 @@ class MainActivity : Activity() {
                     val previousCode = config.prefs.getString("enrollment_code", "")
                     val request = if (previousCode == codeValue) config.prefs.getString("enrollment_request", null) ?: UUID.randomUUID().toString() else UUID.randomUUID().toString()
                     check(config.prefs.edit().putString("enrollment_code", codeValue).putString("enrollment_request", request).commit())
-                    val result = CareApi(config, this).call("/api/device/enroll", JSONObject().put("code", codeValue).put("requestId", request), false)
+                    if (config.selfMode && !config.paired) CareRuntime.sync(this, false)
+                    val linking = config.selfMode && config.paired
+                    val result = CareApi(config, this).call(if (linking) "/api/device/link" else "/api/device/enroll", JSONObject().put("code", codeValue).put("requestId", request), linking)
                     config.savePairing(result); runOnUiThread { dialog.dismiss() }; t("Paired as ${result.getString("personName")}", "已配對 ${result.getString("personName")}")
                 }
             }

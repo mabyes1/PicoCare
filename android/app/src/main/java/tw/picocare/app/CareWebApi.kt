@@ -15,7 +15,10 @@ class CareSession(context: Context) {
     var cookie: String
         get() = prefs.getString("session", "")!!
         set(value) { check(prefs.edit().putString("session", value).commit()) { AppLang.t(app, "Could not save the session", "工作階段儲存失敗") } }
-    val ready: Boolean get() = endpoint.isNotBlank() && cookie.isNotBlank()
+    var recoveryCode: String
+        get() = prefs.getString("recovery:$endpoint", "")!!
+        set(value) { check(prefs.edit().putString("recovery:$endpoint", value).commit()) }
+    val ready: Boolean get() = endpoint.isNotBlank() && (cookie.isNotBlank() || recoveryCode.isNotBlank())
     var workspaceLabel: String
         get() = prefs.getString("workspace", "")!!
         set(value) { prefs.edit().putString("workspace", value).apply() }
@@ -30,40 +33,41 @@ class CareWebApi(private val session: CareSession, private val context: Context?
         if (session.cookie.isNotBlank()) c.setRequestProperty("Cookie", "picocare_session=${session.cookie}")
         return c
     }
-    private fun read(connection: HttpURLConnection): JSONObject {
-        try {
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val raw = stream?.bufferedReader()?.use { it.readText().take(65536) } ?: "{}"
-            val result = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
-            if (status == 401) throw ApiFailure(status, t("Session expired. Please rebuild the care space.", "工作階段過期，請重建照顧空間"))
-            if (status !in 200..299) throw ApiFailure(status, result.optString("error", t("Service replied $status", "服務回應 $status")))
-            return result
-        } finally { connection.disconnect() }
-    }
-    fun get(path: String): JSONObject = read(conn(path).apply { requestMethod = "GET" })
-    fun post(path: String, body: JSONObject? = null): JSONObject {
+    private fun request(path: String, body: JSONObject? = null, post: Boolean = false): JSONObject {
         val c = conn(path)
         try {
-            c.requestMethod = "POST"
+            c.requestMethod = if (post) "POST" else "GET"
             if (body != null) { c.doOutput = true; c.setRequestProperty("Content-Type", "application/json"); c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) } }
             val status = c.responseCode
             val stream = if (status in 200..299) c.inputStream else c.errorStream
             val raw = stream?.bufferedReader()?.use { it.readText().take(65536) } ?: "{}"
             val result = try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
-            if (status == 401) throw ApiFailure(status, t("Session expired. Please rebuild the care space.", "工作階段過期，請重建照顧空間"))
+            if (status == 401) throw ApiFailure(status, t("Open your original care space with its recovery code.", "請用恢復碼重新開啟原本的照顧空間。"))
             if (status !in 200..299) throw ApiFailure(status, result.optString("error", t("Service replied $status", "服務回應 $status")))
             c.getHeaderField("Set-Cookie")?.let { setCookie ->
                 Regex("picocare_session=([A-Za-z0-9_-]+)").find(setCookie)?.groupValues?.get(1)?.let { session.cookie = it }
             }
+            result.optString("recoveryCode").takeIf { it.isNotBlank() }?.let { session.recoveryCode = it }
+            result.optJSONObject("workspace")?.optString("label")?.takeIf { it.isNotBlank() }?.let { session.workspaceLabel = it }
             return result
         } finally { c.disconnect() }
     }
-    fun createWorkspace(label: String, caregiverName: String): JSONObject {
-        val r = post("/api/workspaces", JSONObject().put("label", label).put("kind", "personal").put("caregiverName", caregiverName).put("timezone", "Asia/Taipei"))
-        session.workspaceLabel = r.getJSONObject("workspace").optString("label")
-        return r
+    fun restore(code: String): JSONObject = request("/api/session/restore", JSONObject().put("recoveryCode", code.trim()), true)
+    private fun authenticated(path: String, body: JSONObject? = null, post: Boolean = false): JSONObject {
+        try {
+            if (session.recoveryCode.isBlank() && path != "/api/session") request("/api/session")
+            return request(path, body, post)
+        } catch (error: ApiFailure) {
+            if (error.status != 401 || session.recoveryCode.isBlank()) throw error
+            restore(session.recoveryCode)
+            return request(path, body, post)
+        }
     }
+    fun get(path: String): JSONObject = authenticated(path)
+    fun post(path: String, body: JSONObject? = null): JSONObject =
+        if (path == "/api/workspaces" || path == "/api/session/restore") request(path, body, true) else authenticated(path, body, true)
+    fun createWorkspace(label: String, caregiverName: String): JSONObject =
+        post("/api/workspaces", JSONObject().put("label", label).put("kind", "personal").put("caregiverName", caregiverName).put("timezone", "Asia/Taipei"))
 }
 
 object CareView {

@@ -13,6 +13,8 @@ export class MetaSecretary {
   #busy = false;
   #stopped = false;
   #blocked = false;
+  #openBlocked = false;
+  #openError: string | null = null;
   #abort = new AbortController();
   #requestId: number | null = null;
   #lastError: string | null = null;
@@ -44,7 +46,7 @@ export class MetaSecretary {
     const c = this.#config, enabled = c.enabled && !!c.key, used = this.requestsToday();
     return { enabled, model: enabled ? c.model : null,
       status: !c.enabled ? 'disabled' : !c.key ? 'key_missing' : used >= c.dailyLimit ? 'daily_limit' : this.#lastError ? 'fallback' : this.#busy ? 'connecting' : this.#lastSuccessAt ? 'active' : 'ready',
-      requestsToday: used, dailyLimit: c.dailyLimit, lastSuccessAt: this.#lastSuccessAt, lastError: this.#lastError,
+      requestsToday: used, dailyLimit: c.dailyLimit, lastSuccessAt: this.#lastSuccessAt, lastError: this.#lastError, weeklyLastError: this.#openError,
       lastSkipAt: this.#lastSkipAt, lastSkipReason: this.#lastSkipReason };
   }
   weekly(personId: string, lang?: Lang): { text: string; at: number; model: string } | null {
@@ -67,13 +69,14 @@ export class MetaSecretary {
   }
   async weeklyTick(): Promise<void> {
     const s = this.#store, c = this.#config, via = this.#openApi || this.#api, model = this.#openApi ? c.openModel : c.model;
-    if (this.#busy || this.#stopped || this.#blocked || !c.enabled || (!c.key && !this.#openApi)) return;
+    const open = !!this.#openApi;
+    if (this.#busy || this.#stopped || (open ? this.#openBlocked : this.#blocked) || !c.enabled || (!c.key && !open)) return;
     if (!this.#openApi && this.requestsToday() >= c.dailyLimit) return;
     const lang = s.lang();
     for (const p of s.all('SELECT id FROM people WHERE demo=0')) {
       const prior = s.get('SELECT at FROM secretary_weekly WHERE person_id=? AND lang=?', p.id, lang);
       if (prior && s.now() - prior.at < 7 * 86400000) continue;
-      const req = s.get("SELECT at,error_code FROM meta_requests WHERE person_id=? AND kind='weekly' ORDER BY id DESC LIMIT 1", p.id);
+      const req = s.get("SELECT at,error_code FROM meta_requests WHERE person_id=? AND kind='weekly' AND model=? ORDER BY id DESC LIMIT 1", p.id, model);
       const cooldown = req?.error_code ? Math.max(300000, c.intervalMs) : c.intervalMs;
       if (req && s.now() - req.at < cooldown) continue;
       const input = this.weeklyInput(p.id, lang);
@@ -88,12 +91,18 @@ export class MetaSecretary {
           s.run('UPDATE meta_requests SET status=?,input_tokens=?,output_tokens=? WHERE id=?', 'accepted', result.inputTokens, result.outputTokens, this.#requestId!);
           s.run('INSERT INTO secretary_weekly(person_id,lang,at,text,model) VALUES(?,?,?,?,?) ON CONFLICT(person_id,lang) DO UPDATE SET at=excluded.at,text=excluded.text,model=excluded.model', p.id, lang, s.now(), result.text, model);
         });
-        this.#lastError = null; this.#lastSuccessAt = s.now();
+        if (open) this.#openError = null;
+        else { this.#lastError = null; this.#lastSuccessAt = s.now(); }
       } catch (error) {
         if (this.#stopped) return;
         const code = error instanceof MetaApiError ? error.code : 'internal_error';
-        this.#lastError = code;
-        if (['http_400', 'http_401', 'http_403', 'http_404'].includes(code)) this.#blocked = true;
+        if (open) {
+          this.#openError = code;
+          if (['http_400', 'http_401', 'http_403', 'http_404'].includes(code)) this.#openBlocked = true;
+        } else {
+          this.#lastError = code;
+          if (['http_400', 'http_401', 'http_403', 'http_404'].includes(code)) this.#blocked = true;
+        }
         s.run("UPDATE meta_requests SET status='error',error_code=? WHERE id=?", code, this.#requestId!);
       } finally { this.#busy = false; this.#requestId = null; }
       return;
