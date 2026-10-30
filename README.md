@@ -6,6 +6,8 @@
 
 ![PicoCare — Quiet care across generations](video/public/art-hero.jpg)
 
+**🎬 Demo video (1:49, English, real Galaxy S23 footage): https://www.youtube.com/watch?v=8saCgnKm5GU**
+
 ---
 
 ## The Silence Between Two Homes
